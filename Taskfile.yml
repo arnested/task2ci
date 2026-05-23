@@ -1,0 +1,66 @@
+---
+version: '3'
+
+tasks:
+  default:
+    desc: Run the standard preflight (build, test, vet, lint, yamllint, markdownlint, schema-check)
+    deps: [build, test, vet, lint, yamllint, markdownlint, check, schema-check]
+
+  # @ci: build
+  build:
+    desc: Build the task2ci binary
+    cmd: go build -o task2ci .
+    sources:
+      - "*.go"
+      - go.mod
+      - go.sum
+    generates:
+      - task2ci
+
+  # @ci: test
+  test:
+    desc: Run unit tests
+    cmd: go test ./...
+
+  # @ci: test
+  vet:
+    desc: Run go vet
+    cmd: go vet ./...
+
+  # @ci: test | Run golangci-lint
+  lint:
+    desc: Run golangci-lint
+    cmd: go tool golangci-lint run ./...
+
+  # @ci: test
+  yamllint:
+    desc: Lint YAML files
+    cmd: yamllint .
+
+  # @ci: test
+  markdownlint:
+    desc: Lint Markdown files
+    cmd: npx --yes markdownlint-cli@0.41.0 '**/*.md' --ignore node_modules
+
+  # @ci: test | Validate task2ci.schema.json
+  schema-check:
+    desc: Validate task2ci.schema.json and confirm .task2ci.yml conforms to it
+    cmd: go tool yajsv -s task2ci.schema.json .task2ci.yml
+
+  tidy:
+    desc: Tidy go.mod
+    cmd: go mod tidy
+
+  install-hooks:
+    desc: Activate the tracked git hooks in .githooks (run once per clone)
+    cmd: git config core.hooksPath .githooks
+
+  generate:
+    desc: Regenerate GitHub Actions workflows from Taskfile.yml
+    deps: [build]
+    cmd: ./task2ci
+
+  check:
+    desc: Verify generated workflows match Taskfile.yml
+    deps: [build]
+    cmd: ./task2ci -check

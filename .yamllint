@@ -1,0 +1,15 @@
+---
+extends: default
+
+ignore: |
+  .#*
+
+rules:
+  # GitHub Actions workflows use bare `on:` as a key. YAML 1.1 treats it as a
+  # boolean, which yamllint flags by default. Allow it.
+  truthy:
+    allowed-values: ['true', 'false', 'on', 'off']
+    check-keys: true
+  # Step `run:` lines for build/test commands can run long; don't enforce 80.
+  line-length:
+    max: 120

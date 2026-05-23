@@ -1,0 +1,16 @@
+# Built binary
+/task2ci
+
+# Go test artifacts
+*.test
+*.out
+coverage.html
+
+# go-task cache
+/.task/
+
+# Editor backups & lock files
+*~
+.#*
+\#*\#
+.DS_Store

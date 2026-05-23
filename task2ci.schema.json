@@ -1,0 +1,66 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://arnested.dk/schemas/task2ci.schema.json",
+  "title": "task2ci config",
+  "description": "Configuration file (.task2ci.yml) for the task2ci generator. Defines action versions and tags that tasks reference via `# @ci:` annotations.",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "actions": {
+      "type": "object",
+      "description": "Global overrides for action references used in every job.",
+      "additionalProperties": false,
+      "properties": {
+        "checkout": {
+          "type": "string",
+          "description": "Action ref for the checkout step. Default: actions/checkout@v4",
+          "pattern": "^[^@\\s]+@[^@\\s]+$",
+          "examples": ["actions/checkout@v4", "actions/checkout@v5"]
+        },
+        "setup-task": {
+          "type": "string",
+          "description": "Action ref that installs go-task on the runner. Used only when go-task is not declared as a Go tool dependency. Default: go-task/setup-task@v2",
+          "pattern": "^[^@\\s]+@[^@\\s]+$",
+          "examples": ["go-task/setup-task@v2"]
+        },
+        "setup-task2ci": {
+          "type": "string",
+          "description": "Action ref that installs task2ci on the runner. Used only when task2ci is not declared as a Go tool dependency. Default: arnested/setup-task2ci@v1",
+          "pattern": "^[^@\\s]+@[^@\\s]+$",
+          "examples": ["arnested/setup-task2ci@v1"]
+        }
+      }
+    },
+    "tags": {
+      "type": "object",
+      "description": "Mapping from tag name (referenced in `# @ci: <tag>` annotations) to its workflow/job/runner.",
+      "propertyNames": {
+        "type": "string",
+        "minLength": 1
+      },
+      "additionalProperties": {
+        "type": "object",
+        "description": "A tag definition. `runs-on` is required; `workflow` defaults to \"taskfile\" and `job` defaults to the tag name.",
+        "additionalProperties": false,
+        "required": ["runs-on"],
+        "properties": {
+          "workflow": {
+            "type": "string",
+            "description": "Workflow file the tagged tasks group into (without extension). One file per distinct workflow is generated under .github/workflows/. Default: taskfile",
+            "minLength": 1
+          },
+          "job": {
+            "type": "string",
+            "description": "Job name within the workflow. Multiple tags can target the same job; their `runs-on` must agree. Default: the tag name.",
+            "minLength": 1
+          },
+          "runs-on": {
+            "type": "string",
+            "description": "GitHub Actions runner label (e.g. ubuntu-latest, macos-14).",
+            "minLength": 1
+          }
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,5 @@
+#!/bin/sh
+# task2ci pre-commit hook: run the default preflight task.
+# Activate with `task install-hooks` (sets core.hooksPath to .githooks).
+set -e
+exec go tool task
