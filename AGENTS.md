@@ -48,6 +48,14 @@ If you add another hand-written workflow, follow the same pattern:
 explicit `-linguist-generated` line in `.gitattributes`, top-of-file
 comment explaining why it's not template-driven.
 
+**`WORKFLOWS_PAT` secret**: the regen workflow pushes commits that touch
+`.github/workflows/*.yaml`, which `GITHUB_TOKEN` is not allowed to do
+(GitHub blocks it regardless of `permissions:` block, to prevent
+self-modifying workflows). The repo therefore needs a fine-grained PAT
+stored as the secret `WORKFLOWS_PAT` with **Contents: Read and write** +
+**Workflows: Read and write** scoped to this repo. The first step of the
+regen workflow fails loudly if the secret is missing.
+
 ## Architecture
 
 The flow is:
