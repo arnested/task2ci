@@ -41,7 +41,7 @@ func TestHasToolDirective(t *testing.T) {
 }
 
 func TestOutputPath(t *testing.T) {
-	want := filepath.Join(".github", "workflows", "ci.yml")
+	want := filepath.Join(".github", "workflows", "ci.yaml")
 	if got := outputPath("ci"); got != want {
 		t.Errorf("outputPath(\"ci\") = %q, want %q", got, want)
 	}
@@ -364,15 +364,15 @@ const integrationConfig = schemaRef + `tags:
 
 func TestIntegrationGeneratesWorkflow(t *testing.T) {
 	tmp := t.TempDir()
-	writeFile(t, filepath.Join(tmp, "Taskfile.yml"), integrationTaskfile)
-	writeFile(t, filepath.Join(tmp, ".task2ci.yml"), integrationConfig)
+	writeFile(t, filepath.Join(tmp, "Taskfile.yaml"), integrationTaskfile)
+	writeFile(t, filepath.Join(tmp, ".task2ci.yaml"), integrationConfig)
 
 	stdout, stderr, code := runBinary(t, tmp)
 	if code != 0 {
 		t.Fatalf("exit=%d stderr=%s stdout=%s", code, stderr, stdout)
 	}
 
-	data, err := os.ReadFile(filepath.Join(tmp, ".github/workflows/ci.yml"))
+	data, err := os.ReadFile(filepath.Join(tmp, ".github/workflows/ci.yaml"))
 	if err != nil {
 		t.Fatalf("expected generated workflow: %v", err)
 	}
@@ -398,8 +398,8 @@ func TestIntegrationGeneratesWorkflow(t *testing.T) {
 
 func TestIntegrationCheckPassesAfterGeneration(t *testing.T) {
 	tmp := t.TempDir()
-	writeFile(t, filepath.Join(tmp, "Taskfile.yml"), integrationTaskfile)
-	writeFile(t, filepath.Join(tmp, ".task2ci.yml"), integrationConfig)
+	writeFile(t, filepath.Join(tmp, "Taskfile.yaml"), integrationTaskfile)
+	writeFile(t, filepath.Join(tmp, ".task2ci.yaml"), integrationConfig)
 
 	if _, stderr, code := runBinary(t, tmp); code != 0 {
 		t.Fatalf("generation failed: code=%d stderr=%s", code, stderr)
@@ -412,14 +412,14 @@ func TestIntegrationCheckPassesAfterGeneration(t *testing.T) {
 
 func TestIntegrationCheckDetectsDrift(t *testing.T) {
 	tmp := t.TempDir()
-	writeFile(t, filepath.Join(tmp, "Taskfile.yml"), integrationTaskfile)
-	writeFile(t, filepath.Join(tmp, ".task2ci.yml"), integrationConfig)
+	writeFile(t, filepath.Join(tmp, "Taskfile.yaml"), integrationTaskfile)
+	writeFile(t, filepath.Join(tmp, ".task2ci.yaml"), integrationConfig)
 
 	if _, _, code := runBinary(t, tmp); code != 0 {
 		t.Fatal("generation failed")
 	}
 	// Tamper with the generated file
-	path := filepath.Join(tmp, ".github/workflows/ci.yml")
+	path := filepath.Join(tmp, ".github/workflows/ci.yaml")
 	data, _ := os.ReadFile(path)
 	if err := os.WriteFile(path, append(data, []byte("# tampered\n")...), 0644); err != nil {
 		t.Fatal(err)
@@ -435,13 +435,13 @@ func TestIntegrationCheckDetectsDrift(t *testing.T) {
 
 func TestIntegrationUnknownTagWarns(t *testing.T) {
 	tmp := t.TempDir()
-	writeFile(t, filepath.Join(tmp, "Taskfile.yml"), `version: '3'
+	writeFile(t, filepath.Join(tmp, "Taskfile.yaml"), `version: '3'
 tasks:
   # @ci: nope
   rogue:
     cmd: echo
 `)
-	writeFile(t, filepath.Join(tmp, ".task2ci.yml"), schemaRef+`tags: {}`)
+	writeFile(t, filepath.Join(tmp, ".task2ci.yaml"), schemaRef+`tags: {}`)
 
 	_, stderr, code := runBinary(t, tmp)
 	if code != 0 {
@@ -454,13 +454,13 @@ tasks:
 
 func TestIntegrationConflictingRunsOnIsFatal(t *testing.T) {
 	tmp := t.TempDir()
-	writeFile(t, filepath.Join(tmp, "Taskfile.yml"), `version: '3'
+	writeFile(t, filepath.Join(tmp, "Taskfile.yaml"), `version: '3'
 tasks:
   # @ci: a
   x:
     cmd: echo
 `)
-	writeFile(t, filepath.Join(tmp, ".task2ci.yml"), schemaRef+`tags:
+	writeFile(t, filepath.Join(tmp, ".task2ci.yaml"), schemaRef+`tags:
   a:
     workflow: ci
     job: shared
@@ -481,13 +481,13 @@ tasks:
 
 func TestIntegrationDefaultsWorkflowAndJob(t *testing.T) {
 	tmp := t.TempDir()
-	writeFile(t, filepath.Join(tmp, "Taskfile.yml"), `version: '3'
+	writeFile(t, filepath.Join(tmp, "Taskfile.yaml"), `version: '3'
 tasks:
   # @ci: only
   do:
     cmd: echo
 `)
-	writeFile(t, filepath.Join(tmp, ".task2ci.yml"), schemaRef+`tags:
+	writeFile(t, filepath.Join(tmp, ".task2ci.yaml"), schemaRef+`tags:
   only:
     runs-on: ubuntu-latest
 `)
@@ -495,9 +495,9 @@ tasks:
 		t.Fatalf("unexpected failure: %s", stderr)
 	}
 	// No workflow → defaults to "taskfile"; no job → defaults to tag name "only"
-	data, err := os.ReadFile(filepath.Join(tmp, ".github/workflows/taskfile.yml"))
+	data, err := os.ReadFile(filepath.Join(tmp, ".github/workflows/taskfile.yaml"))
 	if err != nil {
-		t.Fatalf("expected taskfile.yml: %v", err)
+		t.Fatalf("expected taskfile.yaml: %v", err)
 	}
 	content := string(data)
 	if !strings.Contains(content, "  only:") {
@@ -507,7 +507,7 @@ tasks:
 
 func TestIntegrationMultipleWorkflows(t *testing.T) {
 	tmp := t.TempDir()
-	writeFile(t, filepath.Join(tmp, "Taskfile.yml"), `version: '3'
+	writeFile(t, filepath.Join(tmp, "Taskfile.yaml"), `version: '3'
 tasks:
   # @ci: build
   build:
@@ -516,7 +516,7 @@ tasks:
   release:
     cmd: goreleaser
 `)
-	writeFile(t, filepath.Join(tmp, ".task2ci.yml"), schemaRef+`tags:
+	writeFile(t, filepath.Join(tmp, ".task2ci.yaml"), schemaRef+`tags:
   build:
     workflow: ci
     runs-on: ubuntu-latest
@@ -527,7 +527,7 @@ tasks:
 	if _, stderr, code := runBinary(t, tmp); code != 0 {
 		t.Fatalf("unexpected failure: %s", stderr)
 	}
-	for _, name := range []string{"ci.yml", "release.yml"} {
+	for _, name := range []string{"ci.yaml", "release.yaml"} {
 		path := filepath.Join(tmp, ".github/workflows", name)
 		if _, err := os.Stat(path); err != nil {
 			t.Errorf("expected %s to exist: %v", name, err)
@@ -537,7 +537,7 @@ tasks:
 
 func TestIntegrationStepNameOverride(t *testing.T) {
 	tmp := t.TempDir()
-	writeFile(t, filepath.Join(tmp, "Taskfile.yml"), `version: '3'
+	writeFile(t, filepath.Join(tmp, "Taskfile.yaml"), `version: '3'
 tasks:
   # @ci: test | Run all unit tests
   test:
@@ -546,7 +546,7 @@ tasks:
   vet:
     cmd: go vet ./...
 `)
-	writeFile(t, filepath.Join(tmp, ".task2ci.yml"), schemaRef+`tags:
+	writeFile(t, filepath.Join(tmp, ".task2ci.yaml"), schemaRef+`tags:
   test:
     workflow: ci
     runs-on: ubuntu-latest
@@ -554,7 +554,7 @@ tasks:
 	if _, stderr, code := runBinary(t, tmp); code != 0 {
 		t.Fatalf("unexpected failure: %s", stderr)
 	}
-	data, err := os.ReadFile(filepath.Join(tmp, ".github/workflows/ci.yml"))
+	data, err := os.ReadFile(filepath.Join(tmp, ".github/workflows/ci.yaml"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -605,12 +605,12 @@ func TestIntegrationCheckValidatesSchema(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			tmp := t.TempDir()
-			writeFile(t, filepath.Join(tmp, "Taskfile.yml"), `version: '3'
+			writeFile(t, filepath.Join(tmp, "Taskfile.yaml"), `version: '3'
 tasks:
   noop:
     cmd: echo
 `)
-			writeFile(t, filepath.Join(tmp, ".task2ci.yml"), c.config)
+			writeFile(t, filepath.Join(tmp, ".task2ci.yaml"), c.config)
 
 			// First generate so -check has a workflow file to compare against.
 			// (Schema validation should fire before drift check, but generation
@@ -633,8 +633,8 @@ tasks:
 
 func TestIntegrationCheckPassesSchemaOnValidConfig(t *testing.T) {
 	tmp := t.TempDir()
-	writeFile(t, filepath.Join(tmp, "Taskfile.yml"), integrationTaskfile)
-	writeFile(t, filepath.Join(tmp, ".task2ci.yml"), integrationConfig)
+	writeFile(t, filepath.Join(tmp, "Taskfile.yaml"), integrationTaskfile)
+	writeFile(t, filepath.Join(tmp, ".task2ci.yaml"), integrationConfig)
 
 	if _, stderr, code := runBinary(t, tmp); code != 0 {
 		t.Fatalf("generation failed: %s", stderr)
@@ -652,9 +652,9 @@ func TestIntegrationInitWritesStarterConfig(t *testing.T) {
 		t.Fatalf("-init failed: code=%d stderr=%s", code, stderr)
 	}
 
-	data, err := os.ReadFile(filepath.Join(tmp, ".task2ci.yml"))
+	data, err := os.ReadFile(filepath.Join(tmp, ".task2ci.yaml"))
 	if err != nil {
-		t.Fatalf("expected .task2ci.yml to be written: %v", err)
+		t.Fatalf("expected .task2ci.yaml to be written: %v", err)
 	}
 	content := string(data)
 	for _, want := range []string{
@@ -674,7 +674,7 @@ func TestIntegrationInitWritesStarterConfig(t *testing.T) {
 func TestIntegrationInitRefusesToOverwrite(t *testing.T) {
 	tmp := t.TempDir()
 	existing := "tags: {}\n"
-	writeFile(t, filepath.Join(tmp, ".task2ci.yml"), existing)
+	writeFile(t, filepath.Join(tmp, ".task2ci.yaml"), existing)
 
 	_, stderr, code := runBinary(t, tmp, "-init")
 	if code == 0 {
@@ -684,7 +684,7 @@ func TestIntegrationInitRefusesToOverwrite(t *testing.T) {
 		t.Errorf("expected stderr to mention existing file, got: %s", stderr)
 	}
 
-	data, err := os.ReadFile(filepath.Join(tmp, ".task2ci.yml"))
+	data, err := os.ReadFile(filepath.Join(tmp, ".task2ci.yaml"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -702,7 +702,7 @@ func TestIntegrationInitProducesValidConfig(t *testing.T) {
 		t.Fatalf("-init failed: %s", stderr)
 	}
 	// A Taskfile with no @ci annotations: generator runs cleanly but emits 0 files.
-	writeFile(t, filepath.Join(tmp, "Taskfile.yml"), `version: '3'
+	writeFile(t, filepath.Join(tmp, "Taskfile.yaml"), `version: '3'
 tasks:
   noop:
     cmd: echo
@@ -714,13 +714,13 @@ tasks:
 
 func TestIntegrationActionOverrides(t *testing.T) {
 	tmp := t.TempDir()
-	writeFile(t, filepath.Join(tmp, "Taskfile.yml"), `version: '3'
+	writeFile(t, filepath.Join(tmp, "Taskfile.yaml"), `version: '3'
 tasks:
   # @ci: test
   test:
     cmd: go test
 `)
-	writeFile(t, filepath.Join(tmp, ".task2ci.yml"), schemaRef+`actions:
+	writeFile(t, filepath.Join(tmp, ".task2ci.yaml"), schemaRef+`actions:
   checkout: actions/checkout@v5
   setup-task: my-fork/setup-task@v9
   setup-task2ci: my-fork/setup-task2ci@v9
@@ -732,7 +732,7 @@ tags:
 	if _, stderr, code := runBinary(t, tmp); code != 0 {
 		t.Fatalf("unexpected failure: %s", stderr)
 	}
-	data, err := os.ReadFile(filepath.Join(tmp, ".github/workflows/ci.yml"))
+	data, err := os.ReadFile(filepath.Join(tmp, ".github/workflows/ci.yaml"))
 	if err != nil {
 		t.Fatal(err)
 	}

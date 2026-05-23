@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://arnested.dk/schemas/task2ci.schema.json",
   "title": "task2ci config",
-  "description": "Configuration file (.task2ci.yml) for the task2ci generator. Defines action versions and tags that tasks reference via `# @ci:` annotations.",
+  "description": "Configuration file (.task2ci.yaml) for the task2ci generator. Defines action versions and tags that tasks reference via `# @ci:` annotations.",
   "type": "object",
   "additionalProperties": false,
   "properties": {
@@ -56,7 +56,7 @@
           },
           "runs-on": {
             "type": "string",
-            "description": "GitHub Actions runner label (e.g. ubuntu-latest, macos-14).",
+            "description": "GitHub Actions runner label. Pin a specific version (e.g. ubuntu-24.04, macos-14) rather than a floating tag like ubuntu-latest to avoid surprise breakage on runner upgrades.",
             "minLength": 1
           }
         }
