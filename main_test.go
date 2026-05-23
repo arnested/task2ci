@@ -645,6 +645,75 @@ func TestIntegrationTaskfileFlagOverride(t *testing.T) {
 	}
 }
 
+func TestIntegrationMultipleTaskfiles(t *testing.T) {
+	tmp := t.TempDir()
+	writeFile(t, filepath.Join(tmp, "a.yaml"), `version: '3'
+tasks:
+  # @ci: test
+  unit:
+    cmd: go test ./...
+`)
+	writeFile(t, filepath.Join(tmp, "b.yaml"), `version: '3'
+tasks:
+  # @ci: test
+  integration:
+    cmd: go test -tags=integration ./...
+`)
+	writeFile(t, filepath.Join(tmp, ".task2ci/workflows/ci.yaml"), `---
+jobs:
+  j:
+    runs-on: ubuntu-24.04
+    steps:
+      # @ci: test
+`)
+	if _, stderr, code := runBinary(t, tmp, "-taskfile", "a.yaml", "-taskfile", "b.yaml"); code != 0 {
+		t.Fatalf("expected success, got code=%d stderr=%s", code, stderr)
+	}
+	data, err := os.ReadFile(filepath.Join(tmp, ".github/workflows/ci.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	content := string(data)
+	for _, want := range []string{
+		"- name: unit\n        run: task unit",
+		"- name: integration\n        run: task integration",
+	} {
+		if !strings.Contains(content, want) {
+			t.Errorf("expected %q in output:\n%s", want, content)
+		}
+	}
+}
+
+func TestIntegrationDuplicateTaskAcrossFilesWarns(t *testing.T) {
+	tmp := t.TempDir()
+	writeFile(t, filepath.Join(tmp, "a.yaml"), `version: '3'
+tasks:
+  # @ci: test
+  shared:
+    cmd: echo a
+`)
+	writeFile(t, filepath.Join(tmp, "b.yaml"), `version: '3'
+tasks:
+  # @ci: test
+  shared:
+    cmd: echo b
+`)
+	writeFile(t, filepath.Join(tmp, ".task2ci/workflows/ci.yaml"), `---
+jobs:
+  j:
+    runs-on: ubuntu-24.04
+    steps:
+      # @ci: test
+`)
+	_, stderr, code := runBinary(t, tmp, "-taskfile", "a.yaml", "-taskfile", "b.yaml")
+	if code != 0 {
+		t.Fatalf("expected success despite warning, got code=%d stderr=%s", code, stderr)
+	}
+	if !strings.Contains(stderr, `Task "shared"`) {
+		t.Errorf("expected duplicate-task warning, got: %s", stderr)
+	}
+}
+
 func TestIntegrationTaskfileFlagMissingFileIsFatal(t *testing.T) {
 	tmp := t.TempDir()
 	writeFile(t, filepath.Join(tmp, ".task2ci/workflows/ci.yaml"), integrationTemplate)

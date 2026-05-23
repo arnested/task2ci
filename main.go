@@ -50,6 +50,13 @@ func findTaskfile() string {
 // match, so empty substitutions cleanly remove the line.
 var placeholderRE = regexp.MustCompile(`(?m)^([ \t]*)# @ci:[ \t]*(\S+).*$\n?`)
 
+// stringList is a flag.Value that collects repeated occurrences of a string
+// flag (e.g. `-taskfile a.yaml -taskfile b.yaml`).
+type stringList []string
+
+func (s *stringList) String() string     { return strings.Join(*s, ",") }
+func (s *stringList) Set(v string) error { *s = append(*s, v); return nil }
+
 // Task is one Taskfile task slotted into CI via an @ci annotation.
 type Task struct {
 	Name string // task identifier (key in Taskfile tasks map)
@@ -59,19 +66,22 @@ type Task struct {
 
 func main() {
 	checkPtr := flag.Bool("check", false, "Fail if any generated workflow has drifted from its template")
-	taskfilePtr := flag.String("taskfile", "", "Path to the Taskfile (default: auto-discover Taskfile.yml/.yaml etc.)")
+	var taskfiles stringList
+	flag.Var(&taskfiles, "taskfile", "Path to a Taskfile. May be repeated. Default: auto-discover Taskfile.yml/.yaml etc.")
 	flag.Parse()
 
-	taskfilePath := *taskfilePtr
-	if taskfilePath == "" {
-		taskfilePath = findTaskfile()
-		if taskfilePath == "" {
+	if len(taskfiles) == 0 {
+		found := findTaskfile()
+		if found == "" {
 			log.Fatalf("No Taskfile found. Looked for (in order): %s. Use -taskfile to specify a path.",
 				strings.Join(taskfileSearchOrder, ", "))
 		}
+		taskfiles = stringList{found}
 	} else {
-		if _, err := os.Stat(taskfilePath); err != nil {
-			log.Fatalf("Taskfile %q (from -taskfile): %v", taskfilePath, err)
+		for _, p := range taskfiles {
+			if _, err := os.Stat(p); err != nil {
+				log.Fatalf("Taskfile %q (from -taskfile): %v", p, err)
+			}
 		}
 	}
 
@@ -80,7 +90,22 @@ func main() {
 		taskCmd = "go tool task"
 	}
 
-	tasksByTag := readTasks(taskfilePath, taskCmd)
+	tasksByTag := make(map[string][]Task)
+	seenTasks := make(map[string]string) // task name → file it was first seen in
+	for _, path := range taskfiles {
+		for tag, tasks := range readTasks(path, taskCmd) {
+			for _, t := range tasks {
+				if prev, dup := seenTasks[t.Name]; dup {
+					fmt.Fprintf(os.Stderr,
+						"⚠️  Task %q appears in %s and %s; the generated `task %s` step is ambiguous unless go-task can dispatch it deterministically (e.g. via aliases or includes).\n",
+						t.Name, prev, path, t.Name)
+				} else {
+					seenTasks[t.Name] = path
+				}
+				tasksByTag[tag] = append(tasksByTag[tag], t)
+			}
+		}
+	}
 
 	templates, err := listTemplates(TemplateDir)
 	if err != nil {
