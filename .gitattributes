@@ -1,3 +1,6 @@
 # Workflow files are generated from Taskfile.yaml by task2ci.
 # Mark them so GitHub collapses PR diffs and excludes from language stats.
 .github/workflows/*.yaml linguist-generated=true
+
+# Hand-written workflows that aren't template-driven — opt them out.
+.github/workflows/dependabot-regen.yaml -linguist-generated
