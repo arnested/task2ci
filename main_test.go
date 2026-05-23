@@ -791,8 +791,7 @@ func TestIntegrationInitGenericFlavorWithoutGoMod(t *testing.T) {
 		"runs-on: ubuntu-24.04",
 		"actions/checkout@v4",
 		"go-task/setup-task@v2",
-		"go install arnested.dk/go/task2ci@latest",
-		"task2ci -check",
+		"go run arnested.dk/go/task2ci@latest -check",
 		"# @ci: test",
 	} {
 		if !strings.Contains(content, want) {
@@ -802,8 +801,11 @@ func TestIntegrationInitGenericFlavorWithoutGoMod(t *testing.T) {
 	if strings.Contains(content, "uses: actions/setup-go") {
 		t.Errorf("generic template should not USE actions/setup-go (a comment may mention it):\n%s", content)
 	}
+	if strings.Contains(content, "go install arnested.dk/go/task2ci") {
+		t.Errorf("generic template should use `go run @latest`, not a separate `go install` step:\n%s", content)
+	}
 	if strings.Contains(content, "go tool task2ci") {
-		t.Errorf("generic template should use plain `task2ci`, not `go tool task2ci`:\n%s", content)
+		t.Errorf("generic template should use `go run` (no tool-dep assumed), not `go tool task2ci`:\n%s", content)
 	}
 }
 
