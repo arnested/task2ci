@@ -32,6 +32,22 @@ pre-commit hook at `.githooks/pre-commit` runs the same thing.
   - To change them: edit `.task2ci/workflows/<name>.yaml` (the template)
     and/or `Taskfile.yaml`, then run `go tool task generate`.
 
+### Exception: hand-written workflows alongside generated ones
+
+`.github/workflows/dependabot-regen.yaml` is hand-written. It triggers on
+Dependabot PRs, regenerates the templated workflows, and pushes the result
+back to the PR branch so `-check` passes after a version bump.
+
+It lives in `.github/workflows/` because that's the only directory GitHub
+Actions scans, and `.gitattributes` has an explicit `-linguist-generated`
+override for this file. task2ci's normal generation doesn't touch it (the
+generator only writes files for which a corresponding template exists under
+`.task2ci/workflows/`).
+
+If you add another hand-written workflow, follow the same pattern:
+explicit `-linguist-generated` line in `.gitattributes`, top-of-file
+comment explaining why it's not template-driven.
+
 ## Architecture
 
 The flow is:
