@@ -35,7 +35,16 @@ tasks:
   # @ci: test
   yamllint:
     desc: Lint YAML files
-    cmd: yamllint .
+    # yamllint's `ignore:` config is applied inside the linter (after open()),
+    # so broken symlinks (Emacs lock files .#*, etc.) still cause an early
+    # OSError that aborts the whole run. `find -type f` excludes symlinks,
+    # and feeding the list explicitly bypasses yamllint's recursive walk.
+    cmd: |
+      find . -type f \
+        \( -name '*.yaml' -o -name '*.yml' -o -name '.yamllint' \) \
+        -not -path './.git/*' \
+        -not -path './.task/*' \
+        -print0 | xargs -0 yamllint
 
   # @ci: test
   markdownlint:

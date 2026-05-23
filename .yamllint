@@ -3,6 +3,7 @@ extends: default
 
 ignore: |
   .#*
+  **/.#*
 
 rules:
   # GitHub Actions workflows use bare `on:` as a key. YAML 1.1 treats it as a
