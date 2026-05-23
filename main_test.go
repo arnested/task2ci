@@ -40,13 +40,6 @@ func TestHasToolDirective(t *testing.T) {
 	}
 }
 
-func TestOutputPath(t *testing.T) {
-	want := filepath.Join(".github", "workflows", "ci.yaml")
-	if got := outputPath("ci"); got != want {
-		t.Errorf("outputPath(\"ci\") = %q, want %q", got, want)
-	}
-}
-
 func TestParseAnnotation(t *testing.T) {
 	cases := []struct {
 		input, wantTag, wantStep string
@@ -77,21 +70,9 @@ func TestTaskDesc(t *testing.T) {
 	cases := []struct {
 		name, yamlSrc, want string
 	}{
-		{
-			"present",
-			"desc: build the thing\ncmd: go build\n",
-			"build the thing",
-		},
-		{
-			"absent",
-			"cmd: go test\n",
-			"",
-		},
-		{
-			"present with other fields",
-			"cmd: go test\ndesc: run tests\nvars:\n  X: 1\n",
-			"run tests",
-		},
+		{"present", "desc: build the thing\ncmd: go build\n", "build the thing"},
+		{"absent", "cmd: go test\n", ""},
+		{"present with other fields", "cmd: go test\ndesc: run tests\nvars:\n  X: 1\n", "run tests"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -99,8 +80,7 @@ func TestTaskDesc(t *testing.T) {
 			if err := yaml.Unmarshal([]byte(c.yamlSrc), &doc); err != nil {
 				t.Fatal(err)
 			}
-			mapping := doc.Content[0]
-			if got := taskDesc(mapping); got != c.want {
+			if got := taskDesc(doc.Content[0]); got != c.want {
 				t.Errorf("taskDesc = %q, want %q", got, c.want)
 			}
 		})
@@ -118,32 +98,22 @@ func TestTaskDescNilOrWrongKind(t *testing.T) {
 }
 
 func TestFindTasksNode(t *testing.T) {
-	src := `
-version: '3'
-tasks:
-  build:
-    cmd: go build
-  test:
-    cmd: go test
-`
+	src := "version: '3'\ntasks:\n  build:\n    cmd: go build\n  test:\n    cmd: go test\n"
 	var doc yaml.Node
 	if err := yaml.Unmarshal([]byte(src), &doc); err != nil {
 		t.Fatal(err)
 	}
 	node := findTasksNode(&doc)
-	if node == nil {
-		t.Fatal("findTasksNode returned nil for a Taskfile with a tasks block")
+	if node == nil || node.Kind != yaml.MappingNode {
+		t.Fatalf("expected mapping node, got %+v", node)
 	}
-	if node.Kind != yaml.MappingNode {
-		t.Errorf("expected MappingNode, got kind %v", node.Kind)
-	}
-	if len(node.Content) != 4 { // two key/value pairs
-		t.Errorf("expected 4 children (2 tasks × key+value), got %d", len(node.Content))
+	if len(node.Content) != 4 {
+		t.Errorf("expected 4 children, got %d", len(node.Content))
 	}
 }
 
 func TestFindTasksNodeAbsent(t *testing.T) {
-	src := "version: '3'\nincludes:\n  other: ./Other.yml\n"
+	src := "version: '3'\nincludes:\n  other: ./Other.yaml\n"
 	var doc yaml.Node
 	if err := yaml.Unmarshal([]byte(src), &doc); err != nil {
 		t.Fatal(err)
@@ -153,129 +123,113 @@ func TestFindTasksNodeAbsent(t *testing.T) {
 	}
 }
 
-// ---------- yaml marshaling ----------
+// ---------- template rendering ----------
 
-func TestStepMarshalYAMLPrependsNewline(t *testing.T) {
-	s := Step{Name: "first", Run: "echo hi"}
-	v, err := s.MarshalYAML()
-	if err != nil {
-		t.Fatal(err)
+func TestOutputPathFor(t *testing.T) {
+	cases := []struct{ in, want string }{
+		{".task2ci/workflows/ci.yaml", filepath.Join(".github", "workflows", "ci.yaml")},
+		{".task2ci/workflows/release.yml", filepath.Join(".github", "workflows", "release.yaml")},
 	}
-	node := v.(*yaml.Node)
-	if !strings.HasPrefix(node.HeadComment, "\n") {
-		t.Errorf("HeadComment should start with newline (for blank-line separation), got %q", node.HeadComment)
-	}
-}
-
-func TestJobMarshalYAMLOrdering(t *testing.T) {
-	j := Job{
-		RunsOn: "ubuntu-latest",
-		Steps: []Step{
-			{Uses: "actions/checkout@v4"},
-			{Name: "test", Run: "go test ./..."},
-		},
-	}
-	v, err := j.MarshalYAML()
-	if err != nil {
-		t.Fatal(err)
-	}
-	node := v.(*yaml.Node)
-	if node.Kind != yaml.MappingNode {
-		t.Fatalf("expected MappingNode, got %v", node.Kind)
-	}
-	// Expect runs-on first, steps second.
-	if node.Content[0].Value != "runs-on" {
-		t.Errorf("first key = %q, want runs-on", node.Content[0].Value)
-	}
-	if node.Content[2].Value != "steps" {
-		t.Errorf("third key = %q, want steps", node.Content[2].Value)
-	}
-}
-
-func TestJobMarshalYAMLFirstStepHasNoBlankLine(t *testing.T) {
-	j := Job{
-		RunsOn: "ubuntu-latest",
-		Steps:  []Step{{Uses: "actions/checkout@v4"}, {Name: "x", Run: "x"}},
-	}
-	v, _ := j.MarshalYAML()
-	node := v.(*yaml.Node)
-	stepsNode := node.Content[3]
-	first := stepsNode.Content[0]
-	if strings.HasPrefix(first.HeadComment, "\n") {
-		t.Errorf("first step should not have leading newline in HeadComment, got %q", first.HeadComment)
-	}
-	second := stepsNode.Content[1]
-	if !strings.HasPrefix(second.HeadComment, "\n") {
-		t.Errorf("second step should have leading newline, got %q", second.HeadComment)
-	}
-}
-
-func TestWorkflowEncodeStructure(t *testing.T) {
-	w := Workflow{
-		Name: "ci",
-		On:   []string{"push", "pull_request"},
-		Jobs: Jobs{
-			"test": Job{
-				RunsOn: "ubuntu-latest",
-				Steps: []Step{
-					{Uses: "actions/checkout@v4"},
-					{Name: "Run tests", Run: "go test ./..."},
-				},
-			},
-		},
-	}
-	var buf bytes.Buffer
-	enc := yaml.NewEncoder(&buf)
-	enc.SetIndent(2)
-	if err := enc.Encode(&w); err != nil {
-		t.Fatal(err)
-	}
-	out := buf.String()
-
-	for _, want := range []string{
-		"name: ci",
-		"on:\n",
-		"  - push",
-		"  - pull_request",
-		"jobs:",
-		"  test:",
-		"    runs-on: ubuntu-latest",
-		"      - uses: actions/checkout@v4",
-		"      - name: Run tests",
-		"        run: go test ./...",
-	} {
-		if !strings.Contains(out, want) {
-			t.Errorf("output missing %q\nfull output:\n%s", want, out)
+	for _, c := range cases {
+		if got := outputPathFor(c.in); got != c.want {
+			t.Errorf("outputPathFor(%q) = %q, want %q", c.in, got, c.want)
 		}
 	}
+}
 
-	// Blank line between top-level keys (after `name: ci`, before `on:`)
-	if !strings.Contains(out, "name: ci\n\non:") {
-		t.Error("expected blank line between name and on")
+func TestRenderStepIndentAndDashAlignment(t *testing.T) {
+	got := renderStep(Task{Name: "test", Step: "Run tests", Run: "task test"}, "      ")
+	want := "      - name: Run tests\n        run: task test"
+	if got != want {
+		t.Errorf("renderStep mismatch:\nwant:\n%s\ngot:\n%s", want, got)
 	}
 }
 
-func TestJobsMarshalYAMLSortsKeysAndBlankLineBetween(t *testing.T) {
-	js := Jobs{
-		"zebra": Job{RunsOn: "u", Steps: []Step{{Uses: "x"}}},
-		"alpha": Job{RunsOn: "u", Steps: []Step{{Uses: "y"}}},
+func TestRenderStepQuotesValuesWithSpecialChars(t *testing.T) {
+	// A step name containing a colon must round-trip through valid YAML.
+	got := renderStep(Task{Step: "Run: integration tests", Run: "task it"}, "")
+	if !strings.Contains(got, "name: 'Run: integration tests'") &&
+		!strings.Contains(got, `name: "Run: integration tests"`) {
+		t.Errorf("expected quoted name when value contains ':', got:\n%s", got)
 	}
-	v, err := js.MarshalYAML()
-	if err != nil {
-		t.Fatal(err)
+}
+
+func TestRenderBlockBlankLineBetweenSteps(t *testing.T) {
+	got := renderBlock([]Task{
+		{Step: "first", Run: "task first"},
+		{Step: "second", Run: "task second"},
+	}, "  ")
+	want := "  - name: first\n    run: task first\n\n  - name: second\n    run: task second"
+	if got != want {
+		t.Errorf("renderBlock mismatch:\nwant:\n%q\ngot:\n%q", want, got)
 	}
-	node := v.(*yaml.Node)
-	if node.Content[0].Value != "alpha" {
-		t.Errorf("first job = %q, want alpha (sorted)", node.Content[0].Value)
+}
+
+func TestRenderTemplateSubstitutesPlaceholder(t *testing.T) {
+	template := []byte("---\njobs:\n  test:\n    steps:\n      - uses: actions/checkout@v4\n      # @ci: test\n")
+	tasks := map[string][]Task{
+		"test": {{Name: "test", Step: "Run tests", Run: "task test"}},
 	}
-	if node.Content[2].Value != "zebra" {
-		t.Errorf("second job = %q, want zebra", node.Content[2].Value)
+	out, refs := renderTemplate(".task2ci/workflows/ci.yaml", template, tasks)
+	s := string(out)
+	if !strings.Contains(s, "      - name: Run tests") {
+		t.Errorf("expected substituted step at correct indent, got:\n%s", s)
 	}
-	if node.Content[0].HeadComment != "" {
-		t.Errorf("first job should have no HeadComment, got %q", node.Content[0].HeadComment)
+	if strings.Contains(s, "# @ci: test") {
+		t.Errorf("placeholder should be replaced, but is still in output:\n%s", s)
 	}
-	if node.Content[2].HeadComment != "\n" {
-		t.Errorf("second job should have HeadComment=\"\\n\", got %q", node.Content[2].HeadComment)
+	if !strings.HasPrefix(s, "# THIS FILE IS AUTOGENERATED") {
+		t.Errorf("expected autogen header, got:\n%s", s)
+	}
+	if len(refs) != 1 || refs[0] != "test" {
+		t.Errorf("expected refs=[test], got %v", refs)
+	}
+}
+
+func TestRenderTemplateRemovesOrphanPlaceholder(t *testing.T) {
+	template := []byte("steps:\n  - uses: x\n  # @ci: unknown\n  - run: after\n")
+	out, _ := renderTemplate("t.yaml", template, map[string][]Task{})
+	s := string(out)
+	if strings.Contains(s, "# @ci: unknown") {
+		t.Errorf("orphan placeholder should be removed, still present:\n%s", s)
+	}
+	// The surrounding steps must remain
+	if !strings.Contains(s, "- uses: x") || !strings.Contains(s, "- run: after") {
+		t.Errorf("surrounding template content damaged:\n%s", s)
+	}
+}
+
+func TestRenderTemplateSeveralStepsBlankSeparated(t *testing.T) {
+	template := []byte("steps:\n  # @ci: t\n")
+	tasks := map[string][]Task{
+		"t": {
+			{Step: "a", Run: "task a"},
+			{Step: "b", Run: "task b"},
+			{Step: "c", Run: "task c"},
+		},
+	}
+	out, _ := renderTemplate("t.yaml", template, tasks)
+	s := string(out)
+	for _, want := range []string{
+		"  - name: a\n    run: task a",
+		"  - name: b\n    run: task b",
+		"  - name: c\n    run: task c",
+	} {
+		if !strings.Contains(s, want) {
+			t.Errorf("output missing %q\n--- full ---\n%s", want, s)
+		}
+	}
+	// Blank line between consecutive inserted steps.
+	if !strings.Contains(s, "run: task a\n\n  - name: b") {
+		t.Errorf("expected blank line between consecutive steps:\n%s", s)
+	}
+}
+
+func TestStripTrailingWhitespace(t *testing.T) {
+	in := []byte("foo  \n  bar\t\nbaz\n")
+	want := []byte("foo\n  bar\nbaz\n")
+	if got := stripTrailingWhitespace(in); !bytes.Equal(got, want) {
+		t.Errorf("got %q, want %q", got, want)
 	}
 }
 
@@ -315,7 +269,6 @@ func runBinary(t *testing.T, workdir string, args ...string) (stdout, stderr str
 	cmd.Stdout = &outBuf
 	cmd.Stderr = &errBuf
 	err := cmd.Run()
-	exitCode = 0
 	if err != nil {
 		if ee, ok := err.(*exec.ExitError); ok {
 			exitCode = ee.ExitCode()
@@ -328,10 +281,10 @@ func runBinary(t *testing.T, workdir string, args ...string) (stdout, stderr str
 
 func writeFile(t *testing.T, path, content string) {
 	t.Helper()
-	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -351,21 +304,27 @@ tasks:
     cmd: go vet ./...
 `
 
-const schemaRef = "# yaml-language-server: $schema=https://arnested.dk/schemas/task2ci.schema.json\n"
-
-const integrationConfig = schemaRef + `tags:
+const integrationTemplate = `---
+name: ci
+on: [push, pull_request]
+jobs:
   build:
-    workflow: ci
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      # @ci: build
+
   test:
-    workflow: ci
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      # @ci: test
 `
 
 func TestIntegrationGeneratesWorkflow(t *testing.T) {
 	tmp := t.TempDir()
 	writeFile(t, filepath.Join(tmp, "Taskfile.yaml"), integrationTaskfile)
-	writeFile(t, filepath.Join(tmp, ".task2ci.yaml"), integrationConfig)
+	writeFile(t, filepath.Join(tmp, ".task2ci/workflows/ci.yaml"), integrationTemplate)
 
 	stdout, stderr, code := runBinary(t, tmp)
 	if code != 0 {
@@ -377,21 +336,22 @@ func TestIntegrationGeneratesWorkflow(t *testing.T) {
 		t.Fatalf("expected generated workflow: %v", err)
 	}
 	content := string(data)
-
 	for _, want := range []string{
 		"# THIS FILE IS AUTOGENERATED",
 		"name: ci",
 		"  build:",
 		"  test:",
-		"    runs-on: ubuntu-latest",
-		"- name: Build the binary", // desc-as-step-name fallback
-		"- name: Run tests",        // desc-as-step-name fallback
-		"- name: vet",              // no desc, no override → task name
-		"uses: actions/checkout@v4",
-		"uses: arnested/setup-task2ci@v1",
+		"runs-on: ubuntu-24.04",
+		"- uses: actions/checkout@v4",
+		"- name: Build the binary", // desc fallback
+		"- name: Run tests",        // desc fallback
+		"- name: vet",              // bare task name (no desc)
+		"run: task build",          // no go-task tool dep in fixture
+		"run: task test",
+		"run: task vet",
 	} {
 		if !strings.Contains(content, want) {
-			t.Errorf("generated workflow missing %q\n--- full output ---\n%s", want, content)
+			t.Errorf("missing %q in generated workflow:\n%s", want, content)
 		}
 	}
 }
@@ -399,139 +359,87 @@ func TestIntegrationGeneratesWorkflow(t *testing.T) {
 func TestIntegrationCheckPassesAfterGeneration(t *testing.T) {
 	tmp := t.TempDir()
 	writeFile(t, filepath.Join(tmp, "Taskfile.yaml"), integrationTaskfile)
-	writeFile(t, filepath.Join(tmp, ".task2ci.yaml"), integrationConfig)
-
+	writeFile(t, filepath.Join(tmp, ".task2ci/workflows/ci.yaml"), integrationTemplate)
 	if _, stderr, code := runBinary(t, tmp); code != 0 {
-		t.Fatalf("generation failed: code=%d stderr=%s", code, stderr)
+		t.Fatalf("generation failed: %s", stderr)
 	}
-	stdout, stderr, code := runBinary(t, tmp, "-check")
-	if code != 0 {
-		t.Fatalf("-check failed unexpectedly: code=%d stderr=%s stdout=%s", code, stderr, stdout)
+	if _, stderr, code := runBinary(t, tmp, "-check"); code != 0 {
+		t.Fatalf("-check failed unexpectedly: %s", stderr)
 	}
 }
 
 func TestIntegrationCheckDetectsDrift(t *testing.T) {
 	tmp := t.TempDir()
 	writeFile(t, filepath.Join(tmp, "Taskfile.yaml"), integrationTaskfile)
-	writeFile(t, filepath.Join(tmp, ".task2ci.yaml"), integrationConfig)
-
+	writeFile(t, filepath.Join(tmp, ".task2ci/workflows/ci.yaml"), integrationTemplate)
 	if _, _, code := runBinary(t, tmp); code != 0 {
 		t.Fatal("generation failed")
 	}
-	// Tamper with the generated file
 	path := filepath.Join(tmp, ".github/workflows/ci.yaml")
 	data, _ := os.ReadFile(path)
-	if err := os.WriteFile(path, append(data, []byte("# tampered\n")...), 0644); err != nil {
+	if err := os.WriteFile(path, append(data, []byte("# tampered\n")...), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	_, stderr, code := runBinary(t, tmp, "-check")
 	if code == 0 {
-		t.Fatalf("expected -check to fail after tampering, but it passed; stderr=%s", stderr)
+		t.Fatalf("expected -check to fail after tampering; stderr=%s", stderr)
 	}
 	if !strings.Contains(stderr, "drift") {
-		t.Errorf("expected stderr to mention drift, got: %s", stderr)
+		t.Errorf("expected drift message, got: %s", stderr)
 	}
 }
 
-func TestIntegrationUnknownTagWarns(t *testing.T) {
+func TestIntegrationOrphanTagWarning(t *testing.T) {
+	// Task has tag X but template has no @ci: X placeholder.
 	tmp := t.TempDir()
 	writeFile(t, filepath.Join(tmp, "Taskfile.yaml"), `version: '3'
 tasks:
-  # @ci: nope
-  rogue:
+  # @ci: stray
+  loner:
+    cmd: echo
+  # @ci: ok
+  fine:
     cmd: echo
 `)
-	writeFile(t, filepath.Join(tmp, ".task2ci.yaml"), schemaRef+`tags: {}`)
-
+	writeFile(t, filepath.Join(tmp, ".task2ci/workflows/ci.yaml"), `---
+jobs:
+  j:
+    runs-on: ubuntu-24.04
+    steps:
+      # @ci: ok
+`)
 	_, stderr, code := runBinary(t, tmp)
 	if code != 0 {
-		t.Fatalf("unexpected non-zero exit: %d stderr=%s", code, stderr)
+		t.Fatalf("generation should still succeed, got exit=%d stderr=%s", code, stderr)
 	}
-	if !strings.Contains(stderr, "unknown tag") {
-		t.Errorf("expected unknown-tag warning, stderr=%s", stderr)
+	if !strings.Contains(stderr, `Tag "stray"`) || !strings.Contains(stderr, "no template") {
+		t.Errorf("expected orphan-tag warning, got: %s", stderr)
 	}
 }
 
-func TestIntegrationConflictingRunsOnIsFatal(t *testing.T) {
+func TestIntegrationOrphanPlaceholderWarning(t *testing.T) {
+	// Template has @ci: nobody placeholder but no task has that tag.
 	tmp := t.TempDir()
 	writeFile(t, filepath.Join(tmp, "Taskfile.yaml"), `version: '3'
 tasks:
-  # @ci: a
-  x:
+  # @ci: ok
+  fine:
     cmd: echo
 `)
-	writeFile(t, filepath.Join(tmp, ".task2ci.yaml"), schemaRef+`tags:
-  a:
-    workflow: ci
-    job: shared
-    runs-on: ubuntu-latest
-  b:
-    workflow: ci
-    job: shared
-    runs-on: macos-latest
+	writeFile(t, filepath.Join(tmp, ".task2ci/workflows/ci.yaml"), `---
+jobs:
+  j:
+    runs-on: ubuntu-24.04
+    steps:
+      # @ci: ok
+      # @ci: nobody
 `)
 	_, stderr, code := runBinary(t, tmp)
-	if code == 0 {
-		t.Errorf("expected non-zero exit for conflicting runs-on, got 0; stderr=%s", stderr)
+	if code != 0 {
+		t.Fatalf("generation should succeed, got exit=%d stderr=%s", code, stderr)
 	}
-	if !strings.Contains(stderr, "different runs-on") {
-		t.Errorf("expected runs-on conflict message, stderr=%s", stderr)
-	}
-}
-
-func TestIntegrationDefaultsWorkflowAndJob(t *testing.T) {
-	tmp := t.TempDir()
-	writeFile(t, filepath.Join(tmp, "Taskfile.yaml"), `version: '3'
-tasks:
-  # @ci: only
-  do:
-    cmd: echo
-`)
-	writeFile(t, filepath.Join(tmp, ".task2ci.yaml"), schemaRef+`tags:
-  only:
-    runs-on: ubuntu-latest
-`)
-	if _, stderr, code := runBinary(t, tmp); code != 0 {
-		t.Fatalf("unexpected failure: %s", stderr)
-	}
-	// No workflow → defaults to "taskfile"; no job → defaults to tag name "only"
-	data, err := os.ReadFile(filepath.Join(tmp, ".github/workflows/taskfile.yaml"))
-	if err != nil {
-		t.Fatalf("expected taskfile.yaml: %v", err)
-	}
-	content := string(data)
-	if !strings.Contains(content, "  only:") {
-		t.Errorf("expected job named after tag (only), got:\n%s", content)
-	}
-}
-
-func TestIntegrationMultipleWorkflows(t *testing.T) {
-	tmp := t.TempDir()
-	writeFile(t, filepath.Join(tmp, "Taskfile.yaml"), `version: '3'
-tasks:
-  # @ci: build
-  build:
-    cmd: go build
-  # @ci: release
-  release:
-    cmd: goreleaser
-`)
-	writeFile(t, filepath.Join(tmp, ".task2ci.yaml"), schemaRef+`tags:
-  build:
-    workflow: ci
-    runs-on: ubuntu-latest
-  release:
-    workflow: release
-    runs-on: ubuntu-latest
-`)
-	if _, stderr, code := runBinary(t, tmp); code != 0 {
-		t.Fatalf("unexpected failure: %s", stderr)
-	}
-	for _, name := range []string{"ci.yaml", "release.yaml"} {
-		path := filepath.Join(tmp, ".github/workflows", name)
-		if _, err := os.Stat(path); err != nil {
-			t.Errorf("expected %s to exist: %v", name, err)
-		}
+	if !strings.Contains(stderr, `# @ci: nobody`) {
+		t.Errorf("expected orphan-placeholder warning, got: %s", stderr)
 	}
 }
 
@@ -546,10 +454,12 @@ tasks:
   vet:
     cmd: go vet ./...
 `)
-	writeFile(t, filepath.Join(tmp, ".task2ci.yaml"), schemaRef+`tags:
-  test:
-    workflow: ci
-    runs-on: ubuntu-latest
+	writeFile(t, filepath.Join(tmp, ".task2ci/workflows/ci.yaml"), `---
+jobs:
+  j:
+    runs-on: ubuntu-24.04
+    steps:
+      # @ci: test
 `)
 	if _, stderr, code := runBinary(t, tmp); code != 0 {
 		t.Fatalf("unexpected failure: %s", stderr)
@@ -559,191 +469,89 @@ tasks:
 		t.Fatal(err)
 	}
 	content := string(data)
-	// Annotated step gets the override name; the run target stays the task name.
 	if !strings.Contains(content, "- name: Run all unit tests") {
-		t.Errorf("expected overridden step name 'Run all unit tests', got:\n%s", content)
+		t.Errorf("expected overridden step name 'Run all unit tests':\n%s", content)
 	}
 	if !strings.Contains(content, "run: task test") {
-		t.Errorf("expected run line to use task name, got:\n%s", content)
+		t.Errorf("expected run line to use task name:\n%s", content)
 	}
-	// Unannotated step still uses the task name.
 	if !strings.Contains(content, "- name: vet") {
-		t.Errorf("expected vet step to use task name as step name, got:\n%s", content)
+		t.Errorf("expected vet step to use task name (no override, no desc):\n%s", content)
 	}
 }
 
-func TestIntegrationCheckValidatesSchema(t *testing.T) {
-	cases := []struct {
-		name, config, wantErrFragment string
-	}{
-		{
-			"missing runs-on",
-			"---\ntags:\n  x:\n    workflow: ci\n",
-			"missing property 'runs-on'",
-		},
-		{
-			"unknown top-level key",
-			"---\nweird: true\ntags: {}\n",
-			"additional properties 'weird' not allowed",
-		},
-		{
-			"tag value is a scalar",
-			"---\ntags:\n  shorthand: ubuntu-latest\n",
-			"got string, want object",
-		},
-		{
-			"unknown actions key",
-			"---\nactions:\n  setup-ruby: ruby/setup-ruby@v1\ntags: {}\n",
-			"additional properties 'setup-ruby' not allowed",
-		},
-		{
-			"checkout malformed (missing @ref)",
-			"---\nactions:\n  checkout: actions-checkout-v4\ntags: {}\n",
-			"does not match pattern",
-		},
-	}
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			tmp := t.TempDir()
-			writeFile(t, filepath.Join(tmp, "Taskfile.yaml"), `version: '3'
-tasks:
-  noop:
-    cmd: echo
-`)
-			writeFile(t, filepath.Join(tmp, ".task2ci.yaml"), c.config)
-
-			// First generate so -check has a workflow file to compare against.
-			// (Schema validation should fire before drift check, but generation
-			// itself uses loadConfig which doesn't run schema validation.)
-			_, _, _ = runBinary(t, tmp)
-
-			_, stderr, code := runBinary(t, tmp, "-check")
-			if code == 0 {
-				t.Fatalf("expected -check to fail on invalid config, exit was 0\nstderr=%s", stderr)
-			}
-			if !strings.Contains(stderr, "does not conform to the schema") {
-				t.Errorf("expected schema-violation message, got: %s", stderr)
-			}
-			if !strings.Contains(stderr, c.wantErrFragment) {
-				t.Errorf("expected error fragment %q, got: %s", c.wantErrFragment, stderr)
-			}
-		})
-	}
-}
-
-func TestIntegrationCheckPassesSchemaOnValidConfig(t *testing.T) {
-	tmp := t.TempDir()
-	writeFile(t, filepath.Join(tmp, "Taskfile.yaml"), integrationTaskfile)
-	writeFile(t, filepath.Join(tmp, ".task2ci.yaml"), integrationConfig)
-
-	if _, stderr, code := runBinary(t, tmp); code != 0 {
-		t.Fatalf("generation failed: %s", stderr)
-	}
-	if _, stderr, code := runBinary(t, tmp, "-check"); code != 0 {
-		t.Fatalf("-check failed on valid config: %s", stderr)
-	}
-}
-
-func TestIntegrationInitWritesStarterConfig(t *testing.T) {
-	tmp := t.TempDir()
-
-	_, stderr, code := runBinary(t, tmp, "-init")
-	if code != 0 {
-		t.Fatalf("-init failed: code=%d stderr=%s", code, stderr)
-	}
-
-	data, err := os.ReadFile(filepath.Join(tmp, ".task2ci.yaml"))
-	if err != nil {
-		t.Fatalf("expected .task2ci.yaml to be written: %v", err)
-	}
-	content := string(data)
-	for _, want := range []string{
-		"yaml-language-server:",
-		"actions:",
-		"checkout: actions/checkout@v4",
-		"setup-task: go-task/setup-task@v2",
-		"setup-task2ci: arnested/setup-task2ci@v1",
-		"tags:",
-	} {
-		if !strings.Contains(content, want) {
-			t.Errorf("starter config missing %q\n%s", want, content)
-		}
-	}
-}
-
-func TestIntegrationInitRefusesToOverwrite(t *testing.T) {
-	tmp := t.TempDir()
-	existing := "tags: {}\n"
-	writeFile(t, filepath.Join(tmp, ".task2ci.yaml"), existing)
-
-	_, stderr, code := runBinary(t, tmp, "-init")
-	if code == 0 {
-		t.Fatalf("-init should fail when config already exists, got exit 0")
-	}
-	if !strings.Contains(stderr, "already exists") {
-		t.Errorf("expected stderr to mention existing file, got: %s", stderr)
-	}
-
-	data, err := os.ReadFile(filepath.Join(tmp, ".task2ci.yaml"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if string(data) != existing {
-		t.Errorf("existing config was clobbered; got: %s", data)
-	}
-}
-
-func TestIntegrationInitProducesValidConfig(t *testing.T) {
-	// The starter must parse and conform to the schema (i.e., loadConfig accepts it
-	// and a subsequent generation runs without fatal config errors). We test the
-	// loadConfig accept side here; schema conformance is enforced by yajsv in CI.
-	tmp := t.TempDir()
-	if _, stderr, code := runBinary(t, tmp, "-init"); code != 0 {
-		t.Fatalf("-init failed: %s", stderr)
-	}
-	// A Taskfile with no @ci annotations: generator runs cleanly but emits 0 files.
-	writeFile(t, filepath.Join(tmp, "Taskfile.yaml"), `version: '3'
-tasks:
-  noop:
-    cmd: echo
-`)
-	if _, stderr, code := runBinary(t, tmp); code != 0 {
-		t.Fatalf("generator failed against init config: %s", stderr)
-	}
-}
-
-func TestIntegrationActionOverrides(t *testing.T) {
+func TestIntegrationMultipleTemplates(t *testing.T) {
 	tmp := t.TempDir()
 	writeFile(t, filepath.Join(tmp, "Taskfile.yaml"), `version: '3'
 tasks:
-  # @ci: test
-  test:
-    cmd: go test
+  # @ci: build
+  build:
+    cmd: go build
+  # @ci: release
+  release:
+    cmd: goreleaser
 `)
-	writeFile(t, filepath.Join(tmp, ".task2ci.yaml"), schemaRef+`actions:
-  checkout: actions/checkout@v5
-  setup-task: my-fork/setup-task@v9
-  setup-task2ci: my-fork/setup-task2ci@v9
-tags:
-  test:
-    workflow: ci
-    runs-on: ubuntu-latest
+	writeFile(t, filepath.Join(tmp, ".task2ci/workflows/ci.yaml"), `---
+jobs:
+  j:
+    runs-on: ubuntu-24.04
+    steps:
+      # @ci: build
+`)
+	writeFile(t, filepath.Join(tmp, ".task2ci/workflows/release.yaml"), `---
+jobs:
+  j:
+    runs-on: ubuntu-24.04
+    steps:
+      # @ci: release
 `)
 	if _, stderr, code := runBinary(t, tmp); code != 0 {
 		t.Fatalf("unexpected failure: %s", stderr)
 	}
-	data, err := os.ReadFile(filepath.Join(tmp, ".github/workflows/ci.yaml"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	content := string(data)
-	for _, want := range []string{
-		"actions/checkout@v5",
-		"my-fork/setup-task@v9",
-		"my-fork/setup-task2ci@v9",
-	} {
-		if !strings.Contains(content, want) {
-			t.Errorf("missing %q in:\n%s", want, content)
+	for _, name := range []string{"ci.yaml", "release.yaml"} {
+		if _, err := os.Stat(filepath.Join(tmp, ".github/workflows", name)); err != nil {
+			t.Errorf("expected %s to exist: %v", name, err)
 		}
+	}
+}
+
+func TestIntegrationAcceptsYmlExtension(t *testing.T) {
+	tmp := t.TempDir()
+	writeFile(t, filepath.Join(tmp, "Taskfile.yaml"), `version: '3'
+tasks:
+  # @ci: build
+  build:
+    cmd: go build
+`)
+	// Template uses .yml extension.
+	writeFile(t, filepath.Join(tmp, ".task2ci/workflows/ci.yml"), `---
+jobs:
+  j:
+    runs-on: ubuntu-24.04
+    steps:
+      # @ci: build
+`)
+	if _, stderr, code := runBinary(t, tmp); code != 0 {
+		t.Fatalf("unexpected failure: %s", stderr)
+	}
+	// Output should still be .yaml regardless of source extension.
+	if _, err := os.Stat(filepath.Join(tmp, ".github/workflows/ci.yaml")); err != nil {
+		t.Errorf("expected .yaml output even with .yml template: %v", err)
+	}
+}
+
+func TestIntegrationNoTemplatesIsFatal(t *testing.T) {
+	tmp := t.TempDir()
+	writeFile(t, filepath.Join(tmp, "Taskfile.yaml"), `version: '3'
+tasks:
+  noop:
+    cmd: echo
+`)
+	_, stderr, code := runBinary(t, tmp)
+	if code == 0 {
+		t.Fatalf("expected non-zero exit when no templates exist, got 0")
+	}
+	if !strings.Contains(stderr, "No templates found") {
+		t.Errorf("expected helpful message, got: %s", stderr)
 	}
 }

@@ -3,8 +3,8 @@ version: '3'
 
 tasks:
   default:
-    desc: Run the standard preflight (build, test, vet, lint, yamllint, markdownlint, schema-check)
-    deps: [build, test, vet, lint, yamllint, markdownlint, check, schema-check]
+    desc: Run the standard preflight (build, test, vet, lint, yamllint, markdownlint, check)
+    deps: [build, test, vet, lint, yamllint, markdownlint, check]
 
   # @ci: build
   build:
@@ -41,11 +41,6 @@ tasks:
   markdownlint:
     desc: Lint Markdown files
     cmd: npx --yes markdownlint-cli@0.41.0 '**/*.md' --ignore node_modules
-
-  # @ci: test | Validate task2ci.schema.json
-  schema-check:
-    desc: Validate task2ci.schema.json and confirm .task2ci.yaml conforms to it
-    cmd: go tool yajsv -s task2ci.schema.json .task2ci.yaml
 
   tidy:
     desc: Tidy go.mod

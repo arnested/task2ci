@@ -2,167 +2,203 @@ package main
 
 import (
 	"bytes"
-	_ "embed"
 	"flag"
 	"fmt"
 	"log"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 
-	"github.com/santhosh-tekuri/jsonschema/v6"
 	"gopkg.in/yaml.v3"
 )
 
-//go:embed task2ci.schema.json
-var configSchema []byte
-
-// Config is the user-supplied configuration loaded from .task2ci.yaml.
-type Config struct {
-	Actions Actions            `yaml:"actions"`
-	Tags    map[string]TagSpec `yaml:"tags"`
-}
-
-// Actions holds global overrides for action references used in every job.
-type Actions struct {
-	Checkout     string `yaml:"checkout"`
-	SetupTask    string `yaml:"setup-task"`
-	SetupTask2CI string `yaml:"setup-task2ci"`
-}
-
-type TagSpec struct {
-	Workflow string `yaml:"workflow"`
-	Job      string `yaml:"job"`
-	RunsOn   string `yaml:"runs-on"`
-}
-
-// GitHub Actions YAML Structs
-type Workflow struct {
-	Name string
-	On   []string
-	Jobs Jobs
-}
-
-func (w Workflow) MarshalYAML() (interface{}, error) {
-	nameVal := &yaml.Node{Kind: yaml.ScalarNode, Value: w.Name}
-
-	onVal := &yaml.Node{Kind: yaml.SequenceNode}
-	for _, s := range w.On {
-		onVal.Content = append(onVal.Content, &yaml.Node{Kind: yaml.ScalarNode, Value: s})
-	}
-
-	jobsValIface, err := w.Jobs.MarshalYAML()
-	if err != nil {
-		return nil, err
-	}
-	jobsVal := jobsValIface.(*yaml.Node)
-
-	out := &yaml.Node{Kind: yaml.MappingNode}
-	out.Content = append(out.Content,
-		&yaml.Node{Kind: yaml.ScalarNode, Value: "name"}, nameVal,
-		&yaml.Node{Kind: yaml.ScalarNode, Value: "on", HeadComment: "\n"}, onVal,
-		&yaml.Node{Kind: yaml.ScalarNode, Value: "jobs", HeadComment: "\n"}, jobsVal,
-	)
-	return out, nil
-}
-
-// Jobs marshals to a YAML mapping with a blank line between each job.
-// Each Job's value is built by Job.MarshalYAML directly so that head comments
-// on nested Steps survive (yaml.Node.Encode strips HeadComment from values
-// returned by MarshalYAML on nested types).
-type Jobs map[string]Job
-
-func (j Jobs) MarshalYAML() (interface{}, error) {
-	keys := make([]string, 0, len(j))
-	for k := range j {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-
-	out := &yaml.Node{Kind: yaml.MappingNode}
-	for i, k := range keys {
-		keyNode := &yaml.Node{Kind: yaml.ScalarNode, Value: k}
-		if i > 0 {
-			keyNode.HeadComment = "\n"
-		}
-		v, err := j[k].MarshalYAML()
-		if err != nil {
-			return nil, err
-		}
-		out.Content = append(out.Content, keyNode, v.(*yaml.Node))
-	}
-	return out, nil
-}
-
-type Job struct {
-	RunsOn string
-	Steps  []Step
-}
-
-func (j Job) MarshalYAML() (interface{}, error) {
-	stepsNode := &yaml.Node{Kind: yaml.SequenceNode}
-	for i, s := range j.Steps {
-		v, err := s.MarshalYAML()
-		if err != nil {
-			return nil, err
-		}
-		stepNode := v.(*yaml.Node)
-		if i == 0 {
-			// No blank line between `steps:` and the first step.
-			stepNode.HeadComment = strings.TrimPrefix(stepNode.HeadComment, "\n")
-		}
-		stepsNode.Content = append(stepsNode.Content, stepNode)
-	}
-	out := &yaml.Node{Kind: yaml.MappingNode}
-	out.Content = append(out.Content,
-		&yaml.Node{Kind: yaml.ScalarNode, Value: "runs-on"},
-		&yaml.Node{Kind: yaml.ScalarNode, Value: j.RunsOn},
-		&yaml.Node{Kind: yaml.ScalarNode, Value: "steps"},
-		stepsNode,
-	)
-	return out, nil
-}
-
-type Step struct {
-	Name string
-	Uses string
-	Run  string
-}
-
-func (s Step) MarshalYAML() (interface{}, error) {
-	type stepFields struct {
-		Name string `yaml:"name,omitempty"`
-		Uses string `yaml:"uses,omitempty"`
-		Run  string `yaml:"run,omitempty"`
-	}
-	var node yaml.Node
-	if err := node.Encode(stepFields(s)); err != nil {
-		return nil, err
-	}
-	// Leading "\n" makes yaml.v3 emit a blank line before the step.
-	node.HeadComment = "\n"
-	return &node, nil
-}
-
 const (
-	OutputDir       = ".github/workflows"
-	ConfigFile      = ".task2ci.yaml"
-	TaskfileFile    = "Taskfile.yaml"
-	DefaultWorkflow = "taskfile"
-	DefaultCheckout     = "actions/checkout@v4"
-	DefaultSetupTask    = "go-task/setup-task@v2"
-	DefaultSetupTask2CI = "arnested/setup-task2ci@v1"
-	ModulePath          = "arnested.dk/go/task2ci"
-	GoTaskToolPath      = "github.com/go-task/task/v3/cmd/task"
+	OutputDir      = ".github/workflows"
+	TemplateDir    = ".task2ci/workflows"
+	TaskfileFile   = "Taskfile.yaml"
+	ModulePath     = "arnested.dk/go/task2ci"
+	GoTaskToolPath = "github.com/go-task/task/v3/cmd/task"
 )
 
-func outputPath(workflow string) string {
-	return filepath.Join(OutputDir, workflow+".yaml")
+// placeholderRE matches `# @ci: <tag>` lines (any leading whitespace, anything
+// after the tag is tolerated). The line including its trailing newline is the
+// match, so empty substitutions cleanly remove the line.
+var placeholderRE = regexp.MustCompile(`(?m)^([ \t]*)# @ci:[ \t]*(\S+).*$\n?`)
+
+// Task is one Taskfile task slotted into CI via an @ci annotation.
+type Task struct {
+	Name string // task identifier (key in Taskfile tasks map)
+	Step string // resolved display name: annotation override > desc > task name
+	Run  string // run command, e.g. "task test" or "go tool task test"
+}
+
+func main() {
+	checkPtr := flag.Bool("check", false, "Fail if any generated workflow has drifted from its template")
+	flag.Parse()
+
+	taskCmd := "task"
+	if isToolDependency(GoTaskToolPath) {
+		taskCmd = "go tool task"
+	}
+
+	tasksByTag := readTasks(TaskfileFile, taskCmd)
+
+	templates, err := listTemplates(TemplateDir)
+	if err != nil {
+		log.Fatalf("Error listing templates under %s: %v", TemplateDir, err)
+	}
+	if len(templates) == 0 {
+		log.Fatalf("No templates found under %s/. Create at least one workflow template (with `# @ci: <tag>` placeholders) before running task2ci.", TemplateDir)
+	}
+
+	// Render each template to its target path, collecting which tags any
+	// template referenced (used for orphan warnings below).
+	rendered := make(map[string][]byte, len(templates))
+	usedTags := make(map[string]bool)
+	for _, tpath := range templates {
+		data, err := os.ReadFile(tpath)
+		if err != nil {
+			log.Fatalf("Error reading template %s: %v", tpath, err)
+		}
+		out, refs := renderTemplate(tpath, data, tasksByTag)
+		for _, r := range refs {
+			usedTags[r] = true
+		}
+		rendered[outputPathFor(tpath)] = out
+	}
+
+	warnOrphans(tasksByTag, usedTags)
+
+	outPaths := make([]string, 0, len(rendered))
+	for p := range rendered {
+		outPaths = append(outPaths, p)
+	}
+	sort.Strings(outPaths)
+
+	if *checkPtr {
+		var drifted []string
+		for _, p := range outPaths {
+			existing, err := os.ReadFile(p)
+			if err != nil {
+				log.Fatalf("Check failed: could not read existing workflow %s: %v", p, err)
+			}
+			if !bytes.Equal(existing, rendered[p]) {
+				drifted = append(drifted, p)
+			}
+		}
+		if len(drifted) > 0 {
+			log.Fatalf("❌ ERROR: drift detected in: %s. Run task2ci locally and commit the updates.", strings.Join(drifted, ", "))
+		}
+		fmt.Println("✅ Generated workflows are up to date.")
+		return
+	}
+
+	if err := os.MkdirAll(OutputDir, 0o755); err != nil {
+		log.Fatalf("Error creating %s: %v", OutputDir, err)
+	}
+	for _, p := range outPaths {
+		if err := os.WriteFile(p, rendered[p], 0o644); err != nil {
+			log.Fatalf("Error writing %s: %v", p, err)
+		}
+		fmt.Printf("✅ Wrote %s\n", p)
+	}
+}
+
+// listTemplates returns paths to *.yaml and *.yml files under dir (sorted).
+func listTemplates(dir string) ([]string, error) {
+	var out []string
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		name := e.Name()
+		if strings.HasSuffix(name, ".yaml") || strings.HasSuffix(name, ".yml") {
+			out = append(out, filepath.Join(dir, name))
+		}
+	}
+	sort.Strings(out)
+	return out, nil
+}
+
+// outputPathFor maps `.task2ci/workflows/<base>.{yaml,yml}` to
+// `.github/workflows/<base>.yaml`. Output is always .yaml.
+func outputPathFor(tpath string) string {
+	base := filepath.Base(tpath)
+	base = strings.TrimSuffix(strings.TrimSuffix(base, ".yaml"), ".yml")
+	return filepath.Join(OutputDir, base+".yaml")
+}
+
+// renderTemplate substitutes every `# @ci: <tag>` placeholder in data with the
+// rendered step block for that tag. The autogenerated header is prepended.
+// Returns the rendered bytes and the list of tags referenced (in source order,
+// with duplicates).
+func renderTemplate(tpath string, data []byte, tasksByTag map[string][]Task) ([]byte, []string) {
+	var refs []string
+	out := placeholderRE.ReplaceAllFunc(data, func(match []byte) []byte {
+		sub := placeholderRE.FindSubmatch(match)
+		indent := string(sub[1])
+		tag := string(sub[2])
+		refs = append(refs, tag)
+		tasks := tasksByTag[tag]
+		if len(tasks) == 0 {
+			return nil
+		}
+		return []byte(renderBlock(tasks, indent) + "\n")
+	})
+
+	var buf bytes.Buffer
+	fmt.Fprintf(&buf, "# THIS FILE IS AUTOGENERATED by task2ci from %s. DO NOT EDIT.\n", tpath)
+	buf.Write(out)
+	return stripTrailingWhitespace(buf.Bytes()), refs
+}
+
+// renderBlock renders a series of steps at the given indent, with a blank line
+// between consecutive steps.
+func renderBlock(tasks []Task, indent string) string {
+	parts := make([]string, len(tasks))
+	for i, t := range tasks {
+		parts[i] = renderStep(t, indent)
+	}
+	return strings.Join(parts, "\n\n")
+}
+
+// renderStep encodes one step via yaml.v3 (so values are quoted correctly when
+// needed) then re-indents and prefixes the first line with `- `.
+func renderStep(t Task, indent string) string {
+	type stepFields struct {
+		Name string `yaml:"name,omitempty"`
+		Run  string `yaml:"run,omitempty"`
+	}
+	var buf bytes.Buffer
+	enc := yaml.NewEncoder(&buf)
+	enc.SetIndent(2)
+	if err := enc.Encode(stepFields{Name: t.Step, Run: t.Run}); err != nil {
+		log.Fatalf("Encoding step for task %q: %v", t.Name, err)
+	}
+	_ = enc.Close()
+
+	lines := strings.Split(strings.TrimRight(buf.String(), "\n"), "\n")
+	for i, line := range lines {
+		if i == 0 {
+			lines[i] = indent + "- " + line
+		} else {
+			lines[i] = indent + "  " + line
+		}
+	}
+	return strings.Join(lines, "\n")
 }
 
 // stripTrailingWhitespace removes trailing spaces/tabs from each line.
-// yaml.v3 emits the current indent on blank lines, which yamllint flags.
+// Belt-and-suspenders for any tool that ever flags trailing whitespace.
 func stripTrailingWhitespace(b []byte) []byte {
 	lines := bytes.Split(b, []byte("\n"))
 	for i, line := range lines {
@@ -171,82 +207,144 @@ func stripTrailingWhitespace(b []byte) []byte {
 	return bytes.Join(lines, []byte("\n"))
 }
 
-// loadConfig reads .task2ci.yaml. A missing file yields an empty config; any
-// task referencing a tag will warn. Inconsistent runs-on across tags pointing
-// to the same job is reported but non-fatal (first tag wins).
-func loadConfig() *Config {
-	data, err := os.ReadFile(ConfigFile)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return &Config{
-				Actions: Actions{
-					Checkout:     DefaultCheckout,
-					SetupTask:    DefaultSetupTask,
-					SetupTask2CI: DefaultSetupTask2CI,
-				},
-				Tags: map[string]TagSpec{},
+// warnOrphans reports tags used by tasks but not in any template, and
+// placeholders in templates without matching tasks.
+func warnOrphans(tasksByTag map[string][]Task, usedTags map[string]bool) {
+	// Tag annotated in Taskfile but no template uses it.
+	taskTags := make([]string, 0, len(tasksByTag))
+	for tag := range tasksByTag {
+		taskTags = append(taskTags, tag)
+	}
+	sort.Strings(taskTags)
+	for _, tag := range taskTags {
+		if !usedTags[tag] {
+			names := make([]string, len(tasksByTag[tag]))
+			for i, t := range tasksByTag[tag] {
+				names[i] = t.Name
 			}
-		}
-		log.Fatalf("Error reading %s: %v", ConfigFile, err)
-	}
-	var cfg Config
-	if err := yaml.Unmarshal(data, &cfg); err != nil {
-		log.Fatalf("Error parsing %s: %v", ConfigFile, err)
-	}
-	if cfg.Tags == nil {
-		cfg.Tags = map[string]TagSpec{}
-	}
-	if cfg.Actions.Checkout == "" {
-		cfg.Actions.Checkout = DefaultCheckout
-	}
-	if cfg.Actions.SetupTask == "" {
-		cfg.Actions.SetupTask = DefaultSetupTask
-	}
-	if cfg.Actions.SetupTask2CI == "" {
-		cfg.Actions.SetupTask2CI = DefaultSetupTask2CI
-	}
-	// Validate: tags targeting the same (workflow, job) must share runs-on.
-	type jobKey struct{ workflow, job string }
-	byJob := map[jobKey]struct {
-		tag    string
-		runsOn string
-	}{}
-	tagNames := make([]string, 0, len(cfg.Tags))
-	for tag := range cfg.Tags {
-		tagNames = append(tagNames, tag)
-	}
-	sort.Strings(tagNames)
-	for _, tag := range tagNames {
-		spec := cfg.Tags[tag]
-		if spec.Workflow == "" {
-			spec.Workflow = DefaultWorkflow
-		}
-		if spec.Job == "" {
-			spec.Job = tag
-		}
-		cfg.Tags[tag] = spec
-		if spec.RunsOn == "" {
-			log.Fatalf("%s: tag %q is missing required 'runs-on' field", ConfigFile, tag)
-		}
-		key := jobKey{spec.Workflow, spec.Job}
-		if prev, ok := byJob[key]; ok && prev.runsOn != spec.RunsOn {
-			log.Fatalf("%s: tags %q and %q both target job %q in workflow %q but specify different runs-on (%s vs %s)",
-				ConfigFile, prev.tag, tag, spec.Job, spec.Workflow, prev.runsOn, spec.RunsOn)
-		}
-		if _, ok := byJob[key]; !ok {
-			byJob[key] = struct {
-				tag    string
-				runsOn string
-			}{tag, spec.RunsOn}
+			fmt.Fprintf(os.Stderr,
+				"⚠️  Tag %q is used by task(s) %s but no template under %s references it; these tasks will not appear in any workflow.\n",
+				tag, strings.Join(names, ", "), TemplateDir)
 		}
 	}
-	return &cfg
+
+	// Placeholder in template but no task has the tag.
+	templateTags := make([]string, 0, len(usedTags))
+	for tag := range usedTags {
+		templateTags = append(templateTags, tag)
+	}
+	sort.Strings(templateTags)
+	for _, tag := range templateTags {
+		if _, ok := tasksByTag[tag]; !ok {
+			fmt.Fprintf(os.Stderr,
+				"⚠️  Template placeholder `# @ci: %s` has no matching tasks; the placeholder will be removed in the generated workflow.\n",
+				tag)
+		}
+	}
 }
 
-// isToolDependency reports whether the current directory's go.mod registers
-// the given module path as a Go tool dependency. When true, the generated
-// workflow can invoke the binary via `go tool <name>` without a separate
-// install step.
+// readTasks reads the Taskfile, finds `@ci:` annotations, and groups tasks by
+// tag. Order within a tag matches Taskfile order.
+func readTasks(path, taskCmd string) map[string][]Task {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		log.Fatalf("Error reading %s: %v", path, err)
+	}
+	var root yaml.Node
+	if err := yaml.Unmarshal(data, &root); err != nil {
+		log.Fatalf("Error parsing %s: %v", path, err)
+	}
+	tasksNode := findTasksNode(&root)
+	if tasksNode == nil {
+		log.Fatalf("Could not find 'tasks' block in %s", path)
+	}
+
+	out := make(map[string][]Task)
+	for i := 0; i+1 < len(tasksNode.Content); i += 2 {
+		keyNode := tasksNode.Content[i]
+		valueNode := tasksNode.Content[i+1]
+		taskName := keyNode.Value
+
+		comments := []string{keyNode.HeadComment, keyNode.LineComment}
+		if valueNode.Kind == yaml.MappingNode {
+			for _, c := range valueNode.Content {
+				comments = append(comments, c.HeadComment, c.LineComment)
+			}
+		}
+		block := strings.Join(comments, "\n")
+		if !strings.Contains(block, "@ci:") {
+			continue
+		}
+		// First @ci: occurrence on its own line is the annotation we care about.
+		parts := strings.SplitN(block, "@ci:", 2)
+		tagLine := strings.SplitN(parts[1], "\n", 2)[0]
+		tag, stepName := parseAnnotation(tagLine)
+		if tag == "" {
+			continue
+		}
+
+		name := stepName
+		if name == "" {
+			name = taskDesc(valueNode)
+		}
+		if name == "" {
+			name = taskName
+		}
+		out[tag] = append(out[tag], Task{
+			Name: taskName,
+			Step: name,
+			Run:  fmt.Sprintf("%s %s", taskCmd, taskName),
+		})
+	}
+	return out
+}
+
+// parseAnnotation splits an "@ci:" comment payload into (tag, optional step
+// name). Syntax: "tag" or "tag | step name". Whitespace around either side is
+// trimmed. Returns ("", "") for an empty line.
+func parseAnnotation(line string) (tag, stepName string) {
+	line = strings.TrimSpace(line)
+	if line == "" {
+		return "", ""
+	}
+	before, after, hasPipe := strings.Cut(line, "|")
+	if !hasPipe {
+		return strings.TrimSpace(before), ""
+	}
+	return strings.TrimSpace(before), strings.TrimSpace(after)
+}
+
+// taskDesc returns the `desc` string for a task value node, or "" if absent.
+func taskDesc(valueNode *yaml.Node) string {
+	if valueNode == nil || valueNode.Kind != yaml.MappingNode {
+		return ""
+	}
+	for i := 0; i+1 < len(valueNode.Content); i += 2 {
+		if valueNode.Content[i].Value == "desc" {
+			return valueNode.Content[i+1].Value
+		}
+	}
+	return ""
+}
+
+// findTasksNode traverses the AST to find the "tasks" map.
+func findTasksNode(root *yaml.Node) *yaml.Node {
+	if root.Kind == yaml.DocumentNode {
+		root = root.Content[0]
+	}
+	if root.Kind == yaml.MappingNode {
+		for i := 0; i+1 < len(root.Content); i += 2 {
+			if root.Content[i].Value == "tasks" {
+				return root.Content[i+1]
+			}
+		}
+	}
+	return nil
+}
+
+// isToolDependency reports whether the local go.mod registers the given module
+// path as a Go tool dependency. Used to decide whether to invoke a tool via
+// `<name>` or `go tool <name>`.
 func isToolDependency(path string) bool {
 	data, err := os.ReadFile("go.mod")
 	if err != nil {
@@ -261,7 +359,6 @@ func hasToolDirective(content, path string) bool {
 	inBlock := false
 	for _, raw := range strings.Split(content, "\n") {
 		line := strings.TrimSpace(raw)
-		// Strip line comments.
 		if idx := strings.Index(line, "//"); idx >= 0 {
 			line = strings.TrimSpace(line[:idx])
 		}
@@ -289,292 +386,4 @@ func hasToolDirective(content, path string) bool {
 		}
 	}
 	return false
-}
-
-const initTemplate = `# yaml-language-server: $schema=https://arnested.dk/schemas/task2ci.schema.json
----
-actions:
-  checkout: actions/checkout@v4
-  setup-task: go-task/setup-task@v2
-  setup-task2ci: arnested/setup-task2ci@v1
-
-tags:
-  # Define a tag here, then reference it from Taskfile.yaml as e.g.
-  #   # @ci: test
-  # on the tasks you want included in the generated workflow.
-  #
-  # Example:
-  # test:
-  #   workflow: ci          # output file: .github/workflows/ci.yaml (default: taskfile)
-  #   job: test             # job name within the workflow (default: tag name)
-  #   runs-on: ubuntu-24.04 # pin a specific runner version, not ubuntu-latest
-`
-
-// validateConfigAgainstSchema validates the .task2ci.yaml on disk against the
-// embedded JSON Schema. Fatal on schema failure. Missing config file is OK
-// (treated as empty / fully default).
-func validateConfigAgainstSchema() {
-	data, err := os.ReadFile(ConfigFile)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return
-		}
-		log.Fatalf("Error reading %s: %v", ConfigFile, err)
-	}
-	var doc any
-	if err := yaml.Unmarshal(data, &doc); err != nil {
-		log.Fatalf("Error parsing %s: %v", ConfigFile, err)
-	}
-
-	schemaDoc, err := jsonschema.UnmarshalJSON(bytes.NewReader(configSchema))
-	if err != nil {
-		log.Fatalf("Embedded schema is malformed JSON: %v", err)
-	}
-	c := jsonschema.NewCompiler()
-	if err := c.AddResource("task2ci.schema.json", schemaDoc); err != nil {
-		log.Fatalf("Failed to register embedded schema: %v", err)
-	}
-	sch, err := c.Compile("task2ci.schema.json")
-	if err != nil {
-		log.Fatalf("Embedded schema is invalid: %v", err)
-	}
-	if err := sch.Validate(doc); err != nil {
-		log.Fatalf("❌ ERROR: %s does not conform to the schema:\n%v", ConfigFile, err)
-	}
-}
-
-// writeInitConfig writes a starter .task2ci.yaml. Refuses to overwrite if one exists.
-func writeInitConfig() {
-	if _, err := os.Stat(ConfigFile); err == nil {
-		log.Fatalf("%s already exists; refusing to overwrite", ConfigFile)
-	} else if !os.IsNotExist(err) {
-		log.Fatalf("Could not stat %s: %v", ConfigFile, err)
-	}
-	if err := os.WriteFile(ConfigFile, []byte(initTemplate), 0644); err != nil {
-		log.Fatalf("Error writing %s: %v", ConfigFile, err)
-	}
-	fmt.Printf("✅ Wrote starter %s. Edit it to define your tags, then annotate Taskfile tasks with `# @ci: <tag>`.\n", ConfigFile)
-}
-
-func main() {
-	checkPtr := flag.Bool("check", false, "Fail if the generated action is not up to date with Taskfile")
-	initPtr := flag.Bool("init", false, "Write a starter "+ConfigFile+" and exit")
-	flag.Parse()
-
-	if *initPtr {
-		writeInitConfig()
-		return
-	}
-
-	if *checkPtr {
-		validateConfigAgainstSchema()
-	}
-
-	task2ciAsTool := isToolDependency(ModulePath)
-	goTaskAsTool := isToolDependency(GoTaskToolPath)
-	taskCmd := "task"
-	if goTaskAsTool {
-		taskCmd = "go tool task"
-	}
-
-	cfg := loadConfig()
-
-	// 1. Read the Taskfile
-	taskfileData, err := os.ReadFile(TaskfileFile)
-	if err != nil {
-		log.Fatalf("Error reading %s: %v", TaskfileFile, err)
-	}
-
-	// 2. Parse YAML into an AST to preserve comments
-	var root yaml.Node
-	if err := yaml.Unmarshal(taskfileData, &root); err != nil {
-		log.Fatalf("Error parsing Taskfile: %v", err)
-	}
-
-	// 3. Find the "tasks" map node
-	tasksNode := findTasksNode(&root)
-	if tasksNode == nil {
-		log.Fatalf("Could not find 'tasks' block in %s", TaskfileFile)
-	}
-
-	// 4. Extract annotated tasks, grouped by workflow → job
-	workflows := make(map[string]Jobs)
-
-	for i := 0; i < len(tasksNode.Content); i += 2 {
-		keyNode := tasksNode.Content[i]
-		valueNode := tasksNode.Content[i+1]
-		taskName := keyNode.Value
-
-		// Gather comments from the task key itself
-		comments := []string{
-			keyNode.HeadComment,
-			keyNode.LineComment,
-		}
-
-		// Gather comments from all inner fields (like 'desc', 'cmd', 'vars')
-		if valueNode.Kind == yaml.MappingNode {
-			for j := 0; j < len(valueNode.Content); j++ {
-				comments = append(comments, valueNode.Content[j].HeadComment)
-				comments = append(comments, valueNode.Content[j].LineComment)
-			}
-		}
-
-		// Combine all found comments into one block
-		fullCommentBlock := strings.Join(comments, "\n")
-
-		if strings.Contains(fullCommentBlock, "@ci:") {
-			// Parse "<tag> [step name]" from the comment line.
-			parts := strings.SplitN(fullCommentBlock, "@ci:", 2)
-			tagLine := strings.SplitN(parts[1], "\n", 2)[0]
-			tag, stepName := parseAnnotation(tagLine)
-
-			spec, ok := cfg.Tags[tag]
-			if !ok {
-				fmt.Fprintf(os.Stderr, "⚠️  Task %q references unknown tag %q (not defined in %s); skipping.\n", taskName, tag, ConfigFile)
-				continue
-			}
-
-			jobs, ok := workflows[spec.Workflow]
-			if !ok {
-				jobs = Jobs{}
-				workflows[spec.Workflow] = jobs
-			}
-
-			// Initialize the job if it doesn't exist
-			job, exists := jobs[spec.Job]
-			if !exists {
-				steps := []Step{{Uses: cfg.Actions.Checkout}}
-				if task2ciAsTool {
-					steps = append(steps,
-						Step{Name: "Check generated CI is up to date", Run: "go tool task2ci -check"},
-					)
-				} else {
-					steps = append(steps,
-						Step{Name: "Install task2ci", Uses: cfg.Actions.SetupTask2CI},
-						Step{Name: "Check generated CI is up to date", Run: "task2ci -check"},
-					)
-				}
-				if !goTaskAsTool {
-					steps = append(steps,
-						Step{Name: "Install go-task", Uses: cfg.Actions.SetupTask},
-					)
-				}
-				job = Job{RunsOn: spec.RunsOn, Steps: steps}
-			}
-
-			// Resolve the step's display name: annotation override > task desc > task name.
-			name := stepName
-			if name == "" {
-				name = taskDesc(valueNode)
-			}
-			if name == "" {
-				name = taskName
-			}
-			job.Steps = append(job.Steps, Step{
-				Name: name,
-				Run:  fmt.Sprintf("%s %s", taskCmd, taskName),
-			})
-
-			jobs[spec.Job] = job
-		}
-	}
-
-	// 5. Render each workflow into a (path → bytes) map for deterministic output.
-	wfNames := make([]string, 0, len(workflows))
-	for name := range workflows {
-		wfNames = append(wfNames, name)
-	}
-	sort.Strings(wfNames)
-
-	rendered := make(map[string][]byte, len(wfNames))
-	for _, name := range wfNames {
-		workflow := Workflow{
-			Name: name,
-			On:   []string{"push", "pull_request"},
-			Jobs: workflows[name],
-		}
-		var buf bytes.Buffer
-		buf.WriteString("# THIS FILE IS AUTOGENERATED FROM " + TaskfileFile + ". DO NOT EDIT.\n")
-		buf.WriteString("---\n")
-		encoder := yaml.NewEncoder(&buf)
-		encoder.SetIndent(2)
-		if err := encoder.Encode(&workflow); err != nil {
-			log.Fatalf("Error encoding workflow %q: %v", name, err)
-		}
-		rendered[outputPath(name)] = stripTrailingWhitespace(buf.Bytes())
-	}
-
-	// 6. Handle -check flag or file write
-	if *checkPtr {
-		drifted := []string{}
-		for _, name := range wfNames {
-			path := outputPath(name)
-			existing, err := os.ReadFile(path)
-			if err != nil {
-				log.Fatalf("Check failed: Could not read existing workflow at %s. Have you generated it yet?", path)
-			}
-			if !bytes.Equal(existing, rendered[path]) {
-				drifted = append(drifted, path)
-			}
-		}
-		if len(drifted) > 0 {
-			log.Fatalf("❌ ERROR: CI configuration drift detected in: %s. Run the generator locally and commit the updates.", strings.Join(drifted, ", "))
-		}
-		fmt.Println("✅ CI configuration is up to date.")
-		os.Exit(0)
-	}
-
-	if err := os.MkdirAll(OutputDir, 0755); err != nil {
-		log.Fatalf("Error creating %s: %v", OutputDir, err)
-	}
-	for _, name := range wfNames {
-		path := outputPath(name)
-		if err := os.WriteFile(path, rendered[path], 0644); err != nil {
-			log.Fatalf("Error writing %s: %v", path, err)
-		}
-		fmt.Printf("✅ Successfully generated %s\n", path)
-	}
-}
-
-// parseAnnotation splits an "@ci:" comment payload into (tag, optional step name).
-// Syntax: "tag" or "tag | step name". The pipe is the delimiter; whitespace
-// around either side is trimmed. Returns ("", "") for an empty line.
-func parseAnnotation(line string) (tag, stepName string) {
-	line = strings.TrimSpace(line)
-	if line == "" {
-		return "", ""
-	}
-	before, after, hasPipe := strings.Cut(line, "|")
-	if !hasPipe {
-		return strings.TrimSpace(before), ""
-	}
-	return strings.TrimSpace(before), strings.TrimSpace(after)
-}
-
-// taskDesc returns the `desc` string for a task value node, or "" if absent.
-func taskDesc(valueNode *yaml.Node) string {
-	if valueNode == nil || valueNode.Kind != yaml.MappingNode {
-		return ""
-	}
-	for i := 0; i+1 < len(valueNode.Content); i += 2 {
-		if valueNode.Content[i].Value == "desc" {
-			return valueNode.Content[i+1].Value
-		}
-	}
-	return ""
-}
-
-// findTasksNode traverses the AST to find the "tasks" map
-func findTasksNode(root *yaml.Node) *yaml.Node {
-	if root.Kind == yaml.DocumentNode {
-		root = root.Content[0]
-	}
-	if root.Kind == yaml.MappingNode {
-		for i := 0; i < len(root.Content); i += 2 {
-			if root.Content[i].Value == "tasks" {
-				return root.Content[i+1]
-			}
-		}
-	}
-	return nil
 }
