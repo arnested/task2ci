@@ -140,13 +140,21 @@ single-line form and the `tool ( ... )` block form, tolerating trailing
 ## CLI surface
 
 ```text
-task2ci             # generate
-task2ci -check      # fail if any generated workflow has drifted
+task2ci                  # generate
+task2ci -check           # fail if any drift or orphan tag/placeholder
+task2ci -fix             # strip orphan placeholders from templates in place
+task2ci -init            # scaffold a minimal template
+task2ci -taskfile <path> # specify Taskfile path; repeatable
 ```
 
-Two flags total. Keep it minimal. Adding a flag deserves a discussion
-about whether it belongs as a template construct (i.e., owned by the user)
-instead.
+`-check` / `-fix` / `-init` are mutually exclusive. `-fix` only handles the
+deterministic half of cleanup (orphan placeholders); orphan tags get a
+copy-pasteable snippet in the warning instead of auto-generated templates,
+because picking a workflow/job/runner for a new tag is an architectural
+decision the user should make.
+
+Adding more flags deserves a discussion about whether the behavior belongs
+as a template construct (i.e., owned by the user) instead.
 
 ## Style preferences observed in this project
 

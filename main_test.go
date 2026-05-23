@@ -738,6 +738,154 @@ func TestIntegrationNoTaskfileIsFatal(t *testing.T) {
 	}
 }
 
+func TestIntegrationInitWritesStarterTemplate(t *testing.T) {
+	tmp := t.TempDir()
+	stdout, stderr, code := runBinary(t, tmp, "-init")
+	if code != 0 {
+		t.Fatalf("-init failed: code=%d stderr=%s stdout=%s", code, stderr, stdout)
+	}
+	path := filepath.Join(tmp, ".task2ci/workflows/ci.yaml")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("expected template at %s: %v", path, err)
+	}
+	content := string(data)
+	for _, want := range []string{
+		"name: ci",
+		"runs-on: ubuntu-24.04",
+		"actions/checkout@v4",
+		"actions/setup-go@v5",
+		"# @ci: test",
+	} {
+		if !strings.Contains(content, want) {
+			t.Errorf("init template missing %q\n%s", want, content)
+		}
+	}
+}
+
+func TestIntegrationInitRefusesToOverwrite(t *testing.T) {
+	tmp := t.TempDir()
+	existing := "---\nname: pre-existing\n"
+	writeFile(t, filepath.Join(tmp, ".task2ci/workflows/ci.yaml"), existing)
+	_, stderr, code := runBinary(t, tmp, "-init")
+	if code == 0 {
+		t.Fatalf("-init should refuse to overwrite, got exit 0")
+	}
+	if !strings.Contains(stderr, "already exists") {
+		t.Errorf("expected refusal message, got: %s", stderr)
+	}
+	data, _ := os.ReadFile(filepath.Join(tmp, ".task2ci/workflows/ci.yaml"))
+	if string(data) != existing {
+		t.Errorf("existing template was clobbered; got: %s", data)
+	}
+}
+
+func TestIntegrationFixRemovesOrphanPlaceholder(t *testing.T) {
+	tmp := t.TempDir()
+	writeFile(t, filepath.Join(tmp, "Taskfile.yaml"), `version: '3'
+tasks:
+  # @ci: ok
+  fine:
+    cmd: echo
+`)
+	tpath := filepath.Join(tmp, ".task2ci/workflows/ci.yaml")
+	writeFile(t, tpath, `---
+jobs:
+  j:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      # @ci: ok
+      # @ci: ghost
+      - name: tail
+        run: echo
+`)
+	stdout, stderr, code := runBinary(t, tmp, "-fix")
+	if code != 0 {
+		t.Fatalf("-fix failed: code=%d stderr=%s stdout=%s", code, stderr, stdout)
+	}
+	data, err := os.ReadFile(tpath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	content := string(data)
+	if strings.Contains(content, "# @ci: ghost") {
+		t.Errorf("ghost placeholder should be removed:\n%s", content)
+	}
+	if !strings.Contains(content, "# @ci: ok") {
+		t.Errorf("non-orphan placeholder should be preserved:\n%s", content)
+	}
+	if !strings.Contains(content, "- uses: actions/checkout@v4") || !strings.Contains(content, "name: tail") {
+		t.Errorf("surrounding template damaged:\n%s", content)
+	}
+}
+
+func TestIntegrationFixIsIdempotent(t *testing.T) {
+	tmp := t.TempDir()
+	writeFile(t, filepath.Join(tmp, "Taskfile.yaml"), `version: '3'
+tasks:
+  # @ci: ok
+  fine:
+    cmd: echo
+`)
+	tpath := filepath.Join(tmp, ".task2ci/workflows/ci.yaml")
+	writeFile(t, tpath, `---
+jobs:
+  j:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      # @ci: ok
+`)
+	if _, stderr, code := runBinary(t, tmp, "-fix"); code != 0 {
+		t.Fatalf("-fix on already-clean template should succeed: %s", stderr)
+	}
+	before, _ := os.ReadFile(tpath)
+	if _, _, code := runBinary(t, tmp, "-fix"); code != 0 {
+		t.Fatal("second -fix run should also succeed")
+	}
+	after, _ := os.ReadFile(tpath)
+	if !bytes.Equal(before, after) {
+		t.Errorf("second -fix should be a no-op; got diff:\nbefore:\n%s\nafter:\n%s", before, after)
+	}
+}
+
+func TestIntegrationFlagsAreMutuallyExclusive(t *testing.T) {
+	tmp := t.TempDir()
+	_, stderr, code := runBinary(t, tmp, "-check", "-fix")
+	if code == 0 {
+		t.Fatalf("expected non-zero exit when -check and -fix combined")
+	}
+	if !strings.Contains(stderr, "mutually exclusive") {
+		t.Errorf("expected mutual-exclusion message, got: %s", stderr)
+	}
+}
+
+func TestIntegrationOrphanTagWarningIncludesSnippet(t *testing.T) {
+	tmp := t.TempDir()
+	writeFile(t, filepath.Join(tmp, "Taskfile.yaml"), `version: '3'
+tasks:
+  # @ci: forgotten
+  lonely:
+    cmd: echo
+`)
+	writeFile(t, filepath.Join(tmp, ".task2ci/workflows/ci.yaml"), `---
+jobs:
+  j:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+`)
+	_, stderr, code := runBinary(t, tmp)
+	if code != 0 {
+		t.Fatalf("plain generate should succeed: %s", stderr)
+	}
+	// Snippet line for paste must appear
+	if !strings.Contains(stderr, "# @ci: forgotten") {
+		t.Errorf("expected paste-able placeholder in stderr, got: %s", stderr)
+	}
+}
+
 func TestIntegrationNoTemplatesIsFatal(t *testing.T) {
 	tmp := t.TempDir()
 	writeFile(t, filepath.Join(tmp, "Taskfile.yaml"), `version: '3'

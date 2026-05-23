@@ -64,11 +64,97 @@ type Task struct {
 	Run  string // run command, e.g. "task test" or "go tool task test"
 }
 
+const initTemplate = `---
+name: ci
+on: [push, pull_request]
+
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Check generated CI is up to date
+        run: go tool task2ci -check
+      # @ci: test
+`
+
+// initDefaultPath is the path the -init flag writes to. Fixed for now;
+// matches the convention documented in README and AGENTS.
+const initDefaultPath = ".task2ci/workflows/ci.yaml"
+
+// runInit writes a minimal starter template. Refuses to overwrite.
+func runInit() {
+	if _, err := os.Stat(initDefaultPath); err == nil {
+		log.Fatalf("%s already exists; refusing to overwrite. Edit it directly or delete it first.", initDefaultPath)
+	} else if !os.IsNotExist(err) {
+		log.Fatalf("Could not stat %s: %v", initDefaultPath, err)
+	}
+	if err := os.MkdirAll(filepath.Dir(initDefaultPath), 0o755); err != nil {
+		log.Fatalf("Error creating %s: %v", filepath.Dir(initDefaultPath), err)
+	}
+	if err := os.WriteFile(initDefaultPath, []byte(initTemplate), 0o644); err != nil {
+		log.Fatalf("Error writing %s: %v", initDefaultPath, err)
+	}
+	fmt.Printf("✅ Wrote %s. Annotate Taskfile tasks with `# @ci: test` (or rename the tag) to fill the slot, then run task2ci.\n", initDefaultPath)
+}
+
+// runFix mutates templates in place: removes `# @ci: <tag>` placeholder lines
+// whose tag has no matching task. Returns the number of placeholders removed.
+func runFix(templates []string, tasksByTag map[string][]Task) int {
+	removed := 0
+	for _, tpath := range templates {
+		data, err := os.ReadFile(tpath)
+		if err != nil {
+			log.Fatalf("Error reading template %s: %v", tpath, err)
+		}
+		newData := placeholderRE.ReplaceAllFunc(data, func(match []byte) []byte {
+			sub := placeholderRE.FindSubmatch(match)
+			if _, ok := tasksByTag[string(sub[2])]; !ok {
+				removed++
+				return nil
+			}
+			return match
+		})
+		if !bytes.Equal(data, newData) {
+			if err := os.WriteFile(tpath, newData, 0o644); err != nil {
+				log.Fatalf("Error writing %s: %v", tpath, err)
+			}
+			fmt.Printf("✏️  %s: removed orphan placeholder(s)\n", tpath)
+		}
+	}
+	if removed == 0 {
+		fmt.Println("✅ No orphan placeholders found.")
+	} else {
+		fmt.Printf("✅ Removed %d orphan placeholder(s). Run task2ci to regenerate workflows.\n", removed)
+	}
+	return removed
+}
+
 func main() {
 	checkPtr := flag.Bool("check", false, "Fail if any generated workflow has drifted from its template")
+	fixPtr := flag.Bool("fix", false, "Remove orphan `# @ci: <tag>` placeholders from templates (in place)")
+	initPtr := flag.Bool("init", false, "Write a minimal starter template at "+initDefaultPath+" and exit")
 	var taskfiles stringList
 	flag.Var(&taskfiles, "taskfile", "Path to a Taskfile. May be repeated. Default: auto-discover Taskfile.yml/.yaml etc.")
 	flag.Parse()
+
+	exclusive := 0
+	for _, b := range []bool{*checkPtr, *fixPtr, *initPtr} {
+		if b {
+			exclusive++
+		}
+	}
+	if exclusive > 1 {
+		log.Fatalf("-check, -fix, and -init are mutually exclusive")
+	}
+
+	if *initPtr {
+		runInit()
+		return
+	}
 
 	if len(taskfiles) == 0 {
 		found := findTaskfile()
@@ -112,7 +198,12 @@ func main() {
 		log.Fatalf("Error listing templates under %s: %v", TemplateDir, err)
 	}
 	if len(templates) == 0 {
-		log.Fatalf("No templates found under %s/. Create at least one workflow template (with `# @ci: <tag>` placeholders) before running task2ci.", TemplateDir)
+		log.Fatalf("No templates found under %s/. Create at least one workflow template (with `# @ci: <tag>` placeholders) before running task2ci, or run `task2ci -init` to scaffold one.", TemplateDir)
+	}
+
+	if *fixPtr {
+		runFix(templates, tasksByTag)
+		return
 	}
 
 	// Render each template to its target path, collecting which tags any
@@ -295,8 +386,13 @@ func warnOrphans(tasksByTag map[string][]Task, usedTags map[string]bool) int {
 				names[i] = t.Name
 			}
 			fmt.Fprintf(os.Stderr,
-				"⚠️  Tag %q is used by task(s) %s but no template under %s references it; these tasks will not appear in any workflow.\n",
-				tag, strings.Join(names, ", "), TemplateDir)
+				"⚠️  Tag %q is used by task(s) %s but no template under %s references it.\n"+
+					"    Add this placeholder line to an existing template (or create a new one):\n"+
+					"\n"+
+					"      # @ci: %s\n"+
+					"\n"+
+					"    Until then, these tasks will not appear in any workflow.\n",
+				tag, strings.Join(names, ", "), TemplateDir, tag)
 			orphans++
 		}
 	}
