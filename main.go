@@ -17,10 +17,33 @@ import (
 const (
 	OutputDir      = ".github/workflows"
 	TemplateDir    = ".task2ci/workflows"
-	TaskfileFile   = "Taskfile.yaml"
 	ModulePath     = "arnested.dk/go/task2ci"
 	GoTaskToolPath = "github.com/go-task/task/v3/cmd/task"
 )
+
+// taskfileSearchOrder mirrors go-task's resolution: case variants of .yml
+// before .yaml, dist variants last.
+var taskfileSearchOrder = []string{
+	"Taskfile.yml",
+	"taskfile.yml",
+	"Taskfile.yaml",
+	"taskfile.yaml",
+	"Taskfile.dist.yml",
+	"taskfile.dist.yml",
+	"Taskfile.dist.yaml",
+	"taskfile.dist.yaml",
+}
+
+// findTaskfile returns the path of the first existing Taskfile in the search
+// order, or "" if none of the candidates exist.
+func findTaskfile() string {
+	for _, name := range taskfileSearchOrder {
+		if info, err := os.Stat(name); err == nil && !info.IsDir() {
+			return name
+		}
+	}
+	return ""
+}
 
 // placeholderRE matches `# @ci: <tag>` lines (any leading whitespace, anything
 // after the tag is tolerated). The line including its trailing newline is the
@@ -36,14 +59,28 @@ type Task struct {
 
 func main() {
 	checkPtr := flag.Bool("check", false, "Fail if any generated workflow has drifted from its template")
+	taskfilePtr := flag.String("taskfile", "", "Path to the Taskfile (default: auto-discover Taskfile.yml/.yaml etc.)")
 	flag.Parse()
+
+	taskfilePath := *taskfilePtr
+	if taskfilePath == "" {
+		taskfilePath = findTaskfile()
+		if taskfilePath == "" {
+			log.Fatalf("No Taskfile found. Looked for (in order): %s. Use -taskfile to specify a path.",
+				strings.Join(taskfileSearchOrder, ", "))
+		}
+	} else {
+		if _, err := os.Stat(taskfilePath); err != nil {
+			log.Fatalf("Taskfile %q (from -taskfile): %v", taskfilePath, err)
+		}
+	}
 
 	taskCmd := "task"
 	if isToolDependency(GoTaskToolPath) {
 		taskCmd = "go tool task"
 	}
 
-	tasksByTag := readTasks(TaskfileFile, taskCmd)
+	tasksByTag := readTasks(taskfilePath, taskCmd)
 
 	templates, err := listTemplates(TemplateDir)
 	if err != nil {

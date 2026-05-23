@@ -600,6 +600,75 @@ jobs:
 	}
 }
 
+func TestFindTaskfileResolutionOrder(t *testing.T) {
+	tmp := t.TempDir()
+	oldwd, _ := os.Getwd()
+	defer os.Chdir(oldwd) //nolint:errcheck
+	if err := os.Chdir(tmp); err != nil {
+		t.Fatal(err)
+	}
+	// No files: returns "".
+	if got := findTaskfile(); got != "" {
+		t.Errorf("empty dir: want \"\", got %q", got)
+	}
+	// Lower-precedence candidate only.
+	if err := os.WriteFile("Taskfile.yaml", []byte("version: '3'\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got := findTaskfile(); got != "Taskfile.yaml" {
+		t.Errorf("only Taskfile.yaml present: want Taskfile.yaml, got %q", got)
+	}
+	// Higher-precedence candidate beats lower.
+	if err := os.WriteFile("Taskfile.yml", []byte("version: '3'\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got := findTaskfile(); got != "Taskfile.yml" {
+		t.Errorf("Taskfile.yml present alongside Taskfile.yaml: want Taskfile.yml, got %q", got)
+	}
+}
+
+func TestIntegrationFindsTaskfileYml(t *testing.T) {
+	tmp := t.TempDir()
+	writeFile(t, filepath.Join(tmp, "Taskfile.yml"), integrationTaskfile)
+	writeFile(t, filepath.Join(tmp, ".task2ci/workflows/ci.yaml"), integrationTemplate)
+	if _, stderr, code := runBinary(t, tmp); code != 0 {
+		t.Fatalf("expected success with Taskfile.yml, got code=%d stderr=%s", code, stderr)
+	}
+}
+
+func TestIntegrationTaskfileFlagOverride(t *testing.T) {
+	tmp := t.TempDir()
+	writeFile(t, filepath.Join(tmp, "MyTaskfile.yaml"), integrationTaskfile)
+	writeFile(t, filepath.Join(tmp, ".task2ci/workflows/ci.yaml"), integrationTemplate)
+	if _, stderr, code := runBinary(t, tmp, "-taskfile", "MyTaskfile.yaml"); code != 0 {
+		t.Fatalf("expected -taskfile override to succeed, got code=%d stderr=%s", code, stderr)
+	}
+}
+
+func TestIntegrationTaskfileFlagMissingFileIsFatal(t *testing.T) {
+	tmp := t.TempDir()
+	writeFile(t, filepath.Join(tmp, ".task2ci/workflows/ci.yaml"), integrationTemplate)
+	_, stderr, code := runBinary(t, tmp, "-taskfile", "does-not-exist.yaml")
+	if code == 0 {
+		t.Fatalf("expected non-zero exit on missing -taskfile target")
+	}
+	if !strings.Contains(stderr, "does-not-exist.yaml") {
+		t.Errorf("expected error to mention the missing path, got: %s", stderr)
+	}
+}
+
+func TestIntegrationNoTaskfileIsFatal(t *testing.T) {
+	tmp := t.TempDir()
+	writeFile(t, filepath.Join(tmp, ".task2ci/workflows/ci.yaml"), integrationTemplate)
+	_, stderr, code := runBinary(t, tmp)
+	if code == 0 {
+		t.Fatalf("expected non-zero exit when no Taskfile present")
+	}
+	if !strings.Contains(stderr, "No Taskfile found") {
+		t.Errorf("expected helpful message, got: %s", stderr)
+	}
+}
+
 func TestIntegrationNoTemplatesIsFatal(t *testing.T) {
 	tmp := t.TempDir()
 	writeFile(t, filepath.Join(tmp, "Taskfile.yaml"), `version: '3'
