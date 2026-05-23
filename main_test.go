@@ -233,6 +233,240 @@ func TestStripTrailingWhitespace(t *testing.T) {
 	}
 }
 
+// ---------- in-process unit tests for I/O-touching helpers ----------
+
+func TestStringListAccumulates(t *testing.T) {
+	var s stringList
+	if err := s.Set("a"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Set("b"); err != nil {
+		t.Fatal(err)
+	}
+	if len(s) != 2 || s[0] != "a" || s[1] != "b" {
+		t.Errorf("got %v, want [a b]", s)
+	}
+	if got := s.String(); got != "a,b" {
+		t.Errorf("String() = %q, want \"a,b\"", got)
+	}
+}
+
+func chdir(t *testing.T, dir string) {
+	t.Helper()
+	old, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(dir); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(old) })
+}
+
+func TestPickInitTemplate(t *testing.T) {
+	t.Run("no go.mod -> generic", func(t *testing.T) {
+		chdir(t, t.TempDir())
+		tmpl, flavor := pickInitTemplate()
+		if flavor != "generic" {
+			t.Errorf("flavor = %q, want generic", flavor)
+		}
+		if !strings.Contains(tmpl, "go-task/setup-task@v2") {
+			t.Errorf("generic template missing setup-task line:\n%s", tmpl)
+		}
+	})
+	t.Run("with go.mod -> Go", func(t *testing.T) {
+		dir := t.TempDir()
+		if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module x\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		chdir(t, dir)
+		tmpl, flavor := pickInitTemplate()
+		if flavor != "Go" {
+			t.Errorf("flavor = %q, want Go", flavor)
+		}
+		if !strings.Contains(tmpl, "actions/setup-go@v5") {
+			t.Errorf("Go template missing setup-go line:\n%s", tmpl)
+		}
+	})
+}
+
+func TestListTemplates(t *testing.T) {
+	tmp := t.TempDir()
+	// Missing dir -> nil, no error.
+	got, err := listTemplates(filepath.Join(tmp, "nope"))
+	if err != nil || got != nil {
+		t.Errorf("missing dir: got (%v, %v), want (nil, nil)", got, err)
+	}
+	// Populate.
+	for _, name := range []string{"b.yaml", "a.yaml", "z.yml", "ignored.txt"} {
+		writeFile(t, filepath.Join(tmp, "t", name), "---\n")
+	}
+	// Subdir should be skipped.
+	if err := os.MkdirAll(filepath.Join(tmp, "t", "subdir"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	got, err = listTemplates(filepath.Join(tmp, "t"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{
+		filepath.Join(tmp, "t", "a.yaml"),
+		filepath.Join(tmp, "t", "b.yaml"),
+		filepath.Join(tmp, "t", "z.yml"),
+	}
+	if len(got) != len(want) {
+		t.Fatalf("got %v, want %v", got, want)
+	}
+	for i := range got {
+		if got[i] != want[i] {
+			t.Errorf("got[%d] = %q, want %q", i, got[i], want[i])
+		}
+	}
+}
+
+func TestIsToolDependency(t *testing.T) {
+	dir := t.TempDir()
+	chdir(t, dir)
+	if isToolDependency("x.com/foo") {
+		t.Error("no go.mod -> should be false")
+	}
+	if err := os.WriteFile("go.mod", []byte("module x\n\ntool x.com/foo\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if !isToolDependency("x.com/foo") {
+		t.Error("with tool directive present -> should be true")
+	}
+	if isToolDependency("x.com/bar") {
+		t.Error("different path -> should be false")
+	}
+}
+
+func TestReadTasks(t *testing.T) {
+	tmp := t.TempDir()
+	path := filepath.Join(tmp, "Taskfile.yaml")
+	writeFile(t, path, `version: '3'
+tasks:
+  # @ci: test | Run unit tests
+  unit:
+    cmd: go test ./...
+  # @ci: test
+  vet:
+    desc: Run go vet
+    cmd: go vet ./...
+  # @ci: build
+  build:
+    cmd: go build .
+  plain:
+    cmd: echo
+`)
+	got := readTasks(path, "task")
+	if len(got["test"]) != 2 {
+		t.Errorf("expected 2 tasks for 'test', got %d", len(got["test"]))
+	}
+	if len(got["build"]) != 1 {
+		t.Errorf("expected 1 task for 'build', got %d", len(got["build"]))
+	}
+	if got["test"][0].Step != "Run unit tests" {
+		t.Errorf("annotation override not picked up: %+v", got["test"][0])
+	}
+	if got["test"][1].Step != "Run go vet" {
+		t.Errorf("desc fallback not picked up: %+v", got["test"][1])
+	}
+	if got["build"][0].Step != "build" {
+		t.Errorf("task-name fallback not picked up: %+v", got["build"][0])
+	}
+	if got["test"][0].Run != "task unit" {
+		t.Errorf("run command wrong: %+v", got["test"][0])
+	}
+	// Unannotated task should not appear under any tag.
+	for tag, tasks := range got {
+		for _, x := range tasks {
+			if x.Name == "plain" {
+				t.Errorf("unannotated task 'plain' leaked into tag %q", tag)
+			}
+		}
+	}
+}
+
+func TestWarnOrphansBothKinds(t *testing.T) {
+	var buf bytes.Buffer
+	tasks := map[string][]Task{
+		"orphan-tag": {{Name: "x"}},
+		"good":       {{Name: "y"}},
+	}
+	used := map[string]bool{
+		"good":             true,
+		"orphan-placeholder": true,
+	}
+	got := warnOrphans(&buf, tasks, used)
+	if got != 2 {
+		t.Errorf("got %d orphans, want 2", got)
+	}
+	out := buf.String()
+	if !strings.Contains(out, `Tag "orphan-tag"`) {
+		t.Errorf("missing orphan-tag warning:\n%s", out)
+	}
+	if !strings.Contains(out, "# @ci: orphan-tag") {
+		t.Errorf("missing paste-snippet for orphan tag:\n%s", out)
+	}
+	if !strings.Contains(out, "Template placeholder `# @ci: orphan-placeholder`") {
+		t.Errorf("missing orphan-placeholder warning:\n%s", out)
+	}
+}
+
+func TestWarnOrphansSilentWhenClean(t *testing.T) {
+	var buf bytes.Buffer
+	got := warnOrphans(&buf,
+		map[string][]Task{"a": {{Name: "x"}}},
+		map[string]bool{"a": true},
+	)
+	if got != 0 {
+		t.Errorf("expected 0 orphans, got %d", got)
+	}
+	if buf.Len() != 0 {
+		t.Errorf("expected silent output, got: %s", buf.String())
+	}
+}
+
+func TestRunInitWritesGoFlavor(t *testing.T) {
+	dir := t.TempDir()
+	chdir(t, dir)
+	if err := os.WriteFile("go.mod", []byte("module x\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runInit()
+	data, err := os.ReadFile(initDefaultPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), "actions/setup-go@v5") {
+		t.Errorf("expected Go template, got:\n%s", data)
+	}
+}
+
+func TestRunFixRemovesOrphanOnly(t *testing.T) {
+	tmp := t.TempDir()
+	tpath := filepath.Join(tmp, "ci.yaml")
+	writeFile(t, tpath, `steps:
+  - uses: x
+  # @ci: keep
+  # @ci: drop
+`)
+	tasks := map[string][]Task{"keep": {{Name: "x"}}}
+	n := runFix([]string{tpath}, tasks)
+	if n != 1 {
+		t.Errorf("expected 1 removal, got %d", n)
+	}
+	data, _ := os.ReadFile(tpath)
+	out := string(data)
+	if strings.Contains(out, "# @ci: drop") {
+		t.Errorf("orphan placeholder still present:\n%s", out)
+	}
+	if !strings.Contains(out, "# @ci: keep") {
+		t.Errorf("non-orphan placeholder was removed:\n%s", out)
+	}
+}
+
 // ---------- integration (subprocess) ----------
 
 var (
