@@ -317,6 +317,7 @@ require (
 )
 
 tool (
+	arnested.dk/go/task2ci
 	github.com/go-task/task/v3/cmd/task
 	github.com/golangci/golangci-lint/v2/cmd/golangci-lint
 	github.com/neilpa/yajsv
