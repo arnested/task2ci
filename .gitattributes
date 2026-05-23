@@ -1,3 +1,3 @@
-# Workflow files are generated from Taskfile.yml by task2ci.
+# Workflow files are generated from Taskfile.yaml by task2ci.
 # Mark them so GitHub collapses PR diffs and excludes from language stats.
-.github/workflows/*.yml linguist-generated=true
+.github/workflows/*.yaml linguist-generated=true

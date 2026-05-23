@@ -44,8 +44,8 @@ tasks:
 
   # @ci: test | Validate task2ci.schema.json
   schema-check:
-    desc: Validate task2ci.schema.json and confirm .task2ci.yml conforms to it
-    cmd: go tool yajsv -s task2ci.schema.json .task2ci.yml
+    desc: Validate task2ci.schema.json and confirm .task2ci.yaml conforms to it
+    cmd: go tool yajsv -s task2ci.schema.json .task2ci.yaml
 
   tidy:
     desc: Tidy go.mod
@@ -56,11 +56,11 @@ tasks:
     cmd: git config core.hooksPath .githooks
 
   generate:
-    desc: Regenerate GitHub Actions workflows from Taskfile.yml
+    desc: Regenerate GitHub Actions workflows from Taskfile.yaml
     deps: [build]
     cmd: ./task2ci
 
   check:
-    desc: Verify generated workflows match Taskfile.yml
+    desc: Verify generated workflows match Taskfile.yaml
     deps: [build]
     cmd: ./task2ci -check

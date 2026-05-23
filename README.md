@@ -1,6 +1,6 @@
 # task2ci
 
-Generate GitHub Actions workflows from your `Taskfile.yml`, so the commands you
+Generate GitHub Actions workflows from your `Taskfile.yaml`, so the commands you
 run locally are the same ones CI runs — guaranteed, not by hand.
 
 ## What it does
@@ -8,7 +8,7 @@ run locally are the same ones CI runs — guaranteed, not by hand.
 Pick the [go-task] tasks you want CI to run and mark them with a `# @ci: <tag>`
 comment. Run `task2ci`, and it writes a workflow under `.github/workflows/`
 whose jobs invoke those tasks via `task <name>`. A separate `task2ci -check`
-mode fails CI if the generated workflow drifts from `Taskfile.yml`, so the two
+mode fails CI if the generated workflow drifts from `Taskfile.yaml`, so the two
 can't quietly diverge.
 
 [go-task]: https://taskfile.dev/
@@ -17,21 +17,21 @@ can't quietly diverge.
 
 A typical Go project ends up with two parallel lists of commands:
 
-- `Taskfile.yml` — what developers run locally (`task test`, `task lint`)
-- `.github/workflows/ci.yml` — what CI runs (`go test ./...`, `golangci-lint run`)
+- `Taskfile.yaml` — what developers run locally (`task test`, `task lint`)
+- `.github/workflows/ci.yaml` — what CI runs (`go test ./...`, `golangci-lint run`)
 
 These two drift. Someone adds a new check to the Taskfile but forgets the
 workflow, or vice versa, and "works on my machine" creeps in. The fix is to
 keep one source of truth and derive the other.
 
-`task2ci` makes the `Taskfile.yml` the source of truth. CI just invokes the
+`task2ci` makes the `Taskfile.yaml` the source of truth. CI just invokes the
 same `task <name>` you'd run locally, on the same OS image, with the same
 commands. To opt a task into CI, you add a comment; to keep it local-only
 (like `tidy` or `install-hooks`), you don't.
 
 ## Quick start
 
-In a project that already has a `Taskfile.yml`:
+In a project that already has a `Taskfile.yaml`:
 
 ```sh
 # 1. Install task2ci as a Go tool dependency (Go 1.24+)
@@ -41,11 +41,11 @@ go get -tool arnested.dk/go/task2ci
 go tool task2ci -init
 ```
 
-That writes a starter `.task2ci.yml` with the action defaults filled in and a
+That writes a starter `.task2ci.yaml` with the action defaults filled in and a
 commented-out tag example. Define one or more tags:
 
 ```yaml
-# .task2ci.yml
+# .task2ci.yaml
 ---
 actions:
   checkout: actions/checkout@v4
@@ -64,7 +64,7 @@ tags:
 Annotate the tasks you want in CI:
 
 ```yaml
-# Taskfile.yml
+# Taskfile.yaml
 ---
 version: '3'
 
@@ -94,9 +94,9 @@ Generate the workflow:
 go tool task2ci
 ```
 
-You now have `.github/workflows/ci.yml`, a job `build` that runs `task build`,
+You now have `.github/workflows/ci.yaml`, a job `build` that runs `task build`,
 and a job `test` that runs `task test` and `task vet`. Commit both
-`Taskfile.yml` and the generated workflow.
+`Taskfile.yaml` and the generated workflow.
 
 In CI, the very first step in every job is `task2ci -check`, which fails the
 build if the workflow no longer matches the Taskfile — so reviewers see the
@@ -109,7 +109,7 @@ mismatch instead of a stale CI run masking it.
 # @ci: <tag> | <step name>
 ```
 
-- `<tag>` is a key defined under `tags:` in `.task2ci.yml`.
+- `<tag>` is a key defined under `tags:` in `.task2ci.yaml`.
 - The optional step name (after a `|`) overrides the step's display name in
   the workflow. The actual command run is always `task <task-name>`, so this
   only affects what shows up in the GitHub Actions UI.
@@ -129,7 +129,7 @@ The step's `name:` in the generated workflow is chosen in this order:
 So `desc:` doubles as a default display name — concise descriptions show up
 neatly in CI logs.
 
-## Configuration reference (`.task2ci.yml`)
+## Configuration reference (`.task2ci.yaml`)
 
 ```yaml
 actions:
@@ -197,8 +197,8 @@ task2ci [flags]
 | Flag | Behavior |
 |------|----------|
 | _(none)_ | Generate workflow files under `.github/workflows/`, one per distinct `workflow:` in your tag definitions. |
-| `-check` | Validate `.task2ci.yml` against the embedded schema, then fail if any generated workflow on disk differs from what would be produced now. Used in CI. |
-| `-init` | Write a starter `.task2ci.yml`. Refuses to overwrite an existing file. |
+| `-check` | Validate `.task2ci.yaml` against the embedded schema, then fail if any generated workflow on disk differs from what would be produced now. Used in CI. |
+| `-init` | Write a starter `.task2ci.yaml`. Refuses to overwrite an existing file. |
 
 ## How it adapts to your toolchain
 
@@ -238,14 +238,14 @@ tags:
     runs-on: ubuntu-24.04
 ```
 
-Produces both `.github/workflows/ci.yml` and `.github/workflows/release.yml`.
+Produces both `.github/workflows/ci.yaml` and `.github/workflows/release.yaml`.
 Each file is independent and can have its own job structure.
 
 ## CI integration
 
-Once `.github/workflows/<name>.yml` is committed, push to GitHub — Actions
+Once `.github/workflows/<name>.yaml` is committed, push to GitHub — Actions
 picks it up automatically. The first task-running step in every job is
-`task2ci -check`, so any change to `Taskfile.yml` that isn't reflected in the
+`task2ci -check`, so any change to `Taskfile.yaml` that isn't reflected in the
 committed workflow will fail CI immediately with a clear "drift detected"
 message.
 

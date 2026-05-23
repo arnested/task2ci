@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://arnested.dk/schemas/task2ci.schema.json",
   "title": "task2ci config",
-  "description": "Configuration file (.task2ci.yml) for the task2ci generator. Defines action versions and tags that tasks reference via `# @ci:` annotations.",
+  "description": "Configuration file (.task2ci.yaml) for the task2ci generator. Defines action versions and tags that tasks reference via `# @ci:` annotations.",
   "type": "object",
   "additionalProperties": false,
   "properties": {
