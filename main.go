@@ -1,3 +1,6 @@
+// Package main implements task2ci, a CLI that generates GitHub Actions
+// workflows from Taskfile annotations and workflow templates. See README.md
+// or `task2ci --help`.
 package main
 
 import (
@@ -144,7 +147,7 @@ func runInit() error {
 	} else if !os.IsNotExist(err) {
 		return fmt.Errorf("could not stat %s: %w", initDefaultPath, err)
 	}
-	if err := os.MkdirAll(filepath.Dir(initDefaultPath), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(initDefaultPath), 0o750); err != nil {
 		return fmt.Errorf("creating %s: %w", filepath.Dir(initDefaultPath), err)
 	}
 	template, flavor := pickInitTemplate()
@@ -198,6 +201,10 @@ func main() {
 // error on any failure path that main() would have called log.Fatal on.
 //
 // stdout receives success / info output. stderr receives warnings.
+//
+//nolint:gocyclo,cyclop,funlen // Top-level orchestration: linear sequence of
+// mode dispatch and I/O steps. Splitting would just hide the flow without
+// simplifying it.
 func run(args []string, stdout, stderr io.Writer) error {
 	fs := flag.NewFlagSet("task2ci", flag.ContinueOnError)
 	fs.SetOutput(stderr)
@@ -234,7 +241,7 @@ Docs: https://arnested.github.io/task2ci/`)
 		if errors.Is(err, flag.ErrHelp) {
 			return nil
 		}
-		return err
+		return fmt.Errorf("parsing flags: %w", err)
 	}
 
 	if *licensePtr {
@@ -249,7 +256,7 @@ Docs: https://arnested.github.io/task2ci/`)
 		}
 	}
 	if exclusive > 1 {
-		return fmt.Errorf("-check, -fix, and -init are mutually exclusive")
+		return errors.New("-check, -fix, and -init are mutually exclusive")
 	}
 
 	if *initPtr {
@@ -354,7 +361,7 @@ Docs: https://arnested.github.io/task2ci/`)
 				msgs = append(msgs, fmt.Sprintf("%d orphan tag/placeholder warning(s) above", orphans))
 			}
 			if len(drifted) > 0 {
-				msgs = append(msgs, fmt.Sprintf("drift in: %s", strings.Join(drifted, ", ")))
+				msgs = append(msgs, "drift in: "+strings.Join(drifted, ", "))
 			}
 			return fmt.Errorf("❌ ERROR: %s. Fix the issues and run task2ci locally before committing", strings.Join(msgs, "; "))
 		}
@@ -362,7 +369,7 @@ Docs: https://arnested.github.io/task2ci/`)
 		return nil
 	}
 
-	if err := os.MkdirAll(OutputDir, 0o755); err != nil {
+	if err := os.MkdirAll(OutputDir, 0o750); err != nil {
 		return fmt.Errorf("creating %s: %w", OutputDir, err)
 	}
 	for _, p := range outPaths {
@@ -382,7 +389,7 @@ func listTemplates(dir string) ([]string, error) {
 		if os.IsNotExist(err) {
 			return nil, nil
 		}
-		return nil, err
+		return nil, fmt.Errorf("reading dir %s: %w", dir, err)
 	}
 	for _, e := range entries {
 		if e.IsDir() {
@@ -561,30 +568,11 @@ func readTasks(path, taskCmd string) (map[string][]Task, error) {
 	for i := 0; i+1 < len(tasksNode.Content); i += 2 {
 		keyNode := tasksNode.Content[i]
 		valueNode := tasksNode.Content[i+1]
-		taskName := keyNode.Value
-
-		comments := []string{keyNode.HeadComment, keyNode.LineComment}
-		if valueNode.Kind == yaml.MappingNode {
-			for _, c := range valueNode.Content {
-				comments = append(comments, c.HeadComment, c.LineComment)
-			}
-		}
-		block := strings.Join(comments, "\n")
-		if !strings.Contains(block, "@ci:") {
-			continue
-		}
-		// First @ci: occurrence on its own line is the annotation we care about.
-		parts := strings.SplitN(block, "@ci:", 2)
-		tagLine := strings.SplitN(parts[1], "\n", 2)[0]
-		tag, stepName := parseAnnotation(tagLine)
+		tag, name := parseTaskAnnotation(keyNode, valueNode)
 		if tag == "" {
 			continue
 		}
-
-		name := stepName
-		if name == "" {
-			name = taskDesc(valueNode)
-		}
+		taskName := keyNode.Value
 		if name == "" {
 			name = taskName
 		}
@@ -595,6 +583,33 @@ func readTasks(path, taskCmd string) (map[string][]Task, error) {
 		})
 	}
 	return out, nil
+}
+
+// parseTaskAnnotation walks every head and line comment on a task's key and
+// value nodes, finds the first "@ci: <tag>" annotation, and resolves the
+// display name (annotation override → task desc → ""). Returns ("", "") when
+// no annotation is present or the annotation is empty.
+func parseTaskAnnotation(keyNode, valueNode *yaml.Node) (tag, name string) {
+	comments := []string{keyNode.HeadComment, keyNode.LineComment}
+	if valueNode.Kind == yaml.MappingNode {
+		for _, c := range valueNode.Content {
+			comments = append(comments, c.HeadComment, c.LineComment)
+		}
+	}
+	block := strings.Join(comments, "\n")
+	if !strings.Contains(block, "@ci:") {
+		return "", ""
+	}
+	parts := strings.SplitN(block, "@ci:", 2)
+	tagLine := strings.SplitN(parts[1], "\n", 2)[0]
+	tag, name = parseAnnotation(tagLine)
+	if tag == "" {
+		return "", ""
+	}
+	if name == "" {
+		name = taskDesc(valueNode)
+	}
+	return tag, name
 }
 
 // parseAnnotation splits an "@ci:" comment payload into (tag, optional step
@@ -655,7 +670,7 @@ func isToolDependency(path string) bool {
 // directive, either single-line or inside a `tool ( ... )` block.
 func hasToolDirective(content, path string) bool {
 	inBlock := false
-	for _, raw := range strings.Split(content, "\n") {
+	for raw := range strings.SplitSeq(content, "\n") {
 		line := strings.TrimSpace(raw)
 		if idx := strings.Index(line, "//"); idx >= 0 {
 			line = strings.TrimSpace(line[:idx])
@@ -677,8 +692,8 @@ func hasToolDirective(content, path string) bool {
 			inBlock = true
 			continue
 		}
-		if strings.HasPrefix(line, "tool ") {
-			if strings.TrimSpace(strings.TrimPrefix(line, "tool ")) == path {
+		if rest, ok := strings.CutPrefix(line, "tool "); ok {
+			if strings.TrimSpace(rest) == path {
 				return true
 			}
 		}

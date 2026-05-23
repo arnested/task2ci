@@ -1,0 +1,69 @@
+---
+version: "2"
+linters:
+  default: all
+  disable:
+    # Whitespace / formatting style we don't enforce.
+    - wsl
+    - wsl_v5
+    - nlreturn
+    # Anti-idiomatic for small Go: requires every struct field set on literals,
+    # blocks named returns, forbids `if err := ...; err != nil` patterns.
+    - exhaustruct
+    - nonamedreturns
+    - noinlineerr
+    # Demands long variable names; `t *testing.T`, `i` index, `s` byte slice
+    # etc. are conventional Go.
+    - varnamelen
+    # Tests use chdir to set up working directories per case, which makes
+    # parallel execution unsafe.
+    - paralleltest
+    # We have a small handful of legitimate package-level vars
+    # (placeholderRE, taskfileSearchOrder, licenseText) — globals here are
+    # not a smell.
+    - gochecknoglobals
+    # Octal file modes (0o644 / 0o755) and tiny string-literal "magic" values
+    # don't benefit from named constants in a CLI this size.
+    - mnd
+    - goconst
+    # Overlaps with cyclop; same goal, different threshold.
+    - gocognit
+    - nestif
+    # Covered by yamllint's line-length rule for the YAML we generate; for
+    # Go we accept long log/error strings rather than awkward concatenation.
+    - lll
+    # Module-management linter we don't currently configure.
+    - gomodguard
+    # tenv replacement we don't use.
+    - usetesting
+    # Wants sentinel errors so callers can errors.Is them. We never check
+    # error identity in this CLI — errors bubble up to main and print —
+    # so the sentinel-error overhead has no payoff.
+    - err113
+    # Bans fmt.Print* outright. We use it intentionally to communicate
+    # generator success / failure / progress on stdout.
+    - forbidigo
+  settings:
+    depguard:
+      rules:
+        Main:
+          allow:
+            - $gostd
+            - arnested.dk/go/task2ci
+            - gopkg.in/yaml.v3
+    gosec:
+      excludes:
+        # G306: 0o644 is correct for workflows / templates — CI runners
+        # mount these under different users than the committer and need
+        # read access. 0o600 would break that.
+        - G306
+        # G304: ReadFile of variable paths is the whole point of a CLI
+        # that takes user-supplied template / Taskfile paths.
+        - G304
+        # G204: exec.Command with variable args appears only in test
+        # helpers that run the freshly-built test binary.
+        - G204
+        # G703: "Path traversal via taint analysis" on os.WriteFile is the
+        # same point as G304 — the whole job is reading/writing paths the
+        # user supplied.
+        - G703

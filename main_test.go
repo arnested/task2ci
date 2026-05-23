@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -330,7 +331,7 @@ func TestListTemplates(t *testing.T) {
 		writeFile(t, filepath.Join(tmp, "t", name), "---\n")
 	}
 	// Subdir should be skipped.
-	if err := os.MkdirAll(filepath.Join(tmp, "t", "subdir"), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Join(tmp, "t", "subdir"), 0o750); err != nil {
 		t.Fatal(err)
 	}
 	got, err = listTemplates(filepath.Join(tmp, "t"))
@@ -369,6 +370,8 @@ func TestIsToolDependency(t *testing.T) {
 	}
 }
 
+//nolint:cyclop // Linear assertion list — splitting would obscure the matrix
+// of annotation/desc/name fallback cases it exercises.
 func TestReadTasks(t *testing.T) {
 	tmp := t.TempDir()
 	path := filepath.Join(tmp, "Taskfile.yaml")
@@ -480,7 +483,7 @@ func TestRunInitWritesGoFlavor(t *testing.T) {
 func TestRunInitRefusesToOverwrite(t *testing.T) {
 	dir := t.TempDir()
 	chdir(t, dir)
-	if err := os.MkdirAll(filepath.Dir(initDefaultPath), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(initDefaultPath), 0o750); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(initDefaultPath, []byte("---\nname: pre-existing\n"), 0o644); err != nil {
@@ -755,9 +758,9 @@ jobs:
 // ---------- integration (subprocess) ----------
 
 var (
-	binaryPath string
-	buildOnce  sync.Once
-	buildErr   error
+	binaryPath  string
+	buildOnce   sync.Once
+	errBuildBin error
 )
 
 func buildBinary(t *testing.T) string {
@@ -765,31 +768,32 @@ func buildBinary(t *testing.T) string {
 	buildOnce.Do(func() {
 		tmpdir, err := os.MkdirTemp("", "task2ci-bin-")
 		if err != nil {
-			buildErr = err
+			errBuildBin = err
 			return
 		}
 		binaryPath = filepath.Join(tmpdir, "task2ci")
-		cmd := exec.Command("go", "build", "-o", binaryPath, ".")
+		cmd := exec.CommandContext(t.Context(), "go", "build", "-o", binaryPath, ".")
 		if out, err := cmd.CombinedOutput(); err != nil {
-			buildErr = fmt.Errorf("go build: %w\n%s", err, out)
+			errBuildBin = fmt.Errorf("go build: %w\n%s", err, out)
 		}
 	})
-	if buildErr != nil {
-		t.Fatalf("failed to build test binary: %v", buildErr)
+	if errBuildBin != nil {
+		t.Fatalf("failed to build test binary: %v", errBuildBin)
 	}
 	return binaryPath
 }
 
 func runBinary(t *testing.T, workdir string, args ...string) (stdout, stderr string, exitCode int) {
 	t.Helper()
-	cmd := exec.Command(buildBinary(t), args...)
+	cmd := exec.CommandContext(t.Context(), buildBinary(t), args...)
 	cmd.Dir = workdir
 	var outBuf, errBuf bytes.Buffer
 	cmd.Stdout = &outBuf
 	cmd.Stderr = &errBuf
 	err := cmd.Run()
 	if err != nil {
-		if ee, ok := err.(*exec.ExitError); ok {
+		var ee *exec.ExitError
+		if errors.As(err, &ee) {
 			exitCode = ee.ExitCode()
 		} else {
 			t.Fatalf("running binary: %v", err)
@@ -800,7 +804,7 @@ func runBinary(t *testing.T, workdir string, args ...string) (stdout, stderr str
 
 func writeFile(t *testing.T, path, content string) {
 	t.Helper()
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
