@@ -85,9 +85,10 @@ jobs:
 `
 
 // initTemplateGeneric is the starter for non-Go projects. Installs go-task
-// via the marketplace action and task2ci via `go install` (ubuntu-24.04
-// has Go preinstalled). Setup steps for the project's own toolchain are
-// commented out as examples for the user to swap in.
+// via the marketplace action and runs task2ci via `go run <module>@latest`
+// (ubuntu-24.04 has Go preinstalled, and we only need task2ci for a single
+// `-check` step). Setup steps for the project's own toolchain are commented
+// out as examples for the user to swap in.
 const initTemplateGeneric = `---
 name: ci
 on: [push, pull_request]
@@ -108,14 +109,11 @@ jobs:
 
       - uses: go-task/setup-task@v2
 
-      - name: Install task2ci
-        # ubuntu-24.04 has Go preinstalled, so go install works without an
+      - name: Check generated CI is up to date
+        # ubuntu-24.04 has Go preinstalled, so go run works without an
         # explicit actions/setup-go step. Swap to a release-binary download
         # or different runner if you'd rather not depend on that.
-        run: go install arnested.dk/go/task2ci@latest
-
-      - name: Check generated CI is up to date
-        run: task2ci -check
+        run: go run arnested.dk/go/task2ci@latest -check
       # @ci: test
 `
 
