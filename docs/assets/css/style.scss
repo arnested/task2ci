@@ -1,0 +1,46 @@
+---
+---
+@import "{{ site.theme }}";
+
+// Cayman renders the body at a comfortable reading width; nothing extra
+// needed there. The pieces below are the bits cayman doesn't already cover.
+
+// Caution callout — mimics GitHub's > [!CAUTION] alert which kramdown
+// doesn't render natively.
+.callout-caution {
+  border-left: 4px solid #cf222e;
+  background: #fff5f6;
+  padding: 0.75rem 1rem;
+  margin: 1.5rem 0;
+  border-radius: 4px;
+  color: #1f2328;
+}
+
+.callout-caution .callout-title {
+  color: #cf222e;
+  font-weight: 600;
+  display: block;
+  margin-bottom: 0.25rem;
+}
+
+.callout-caution p:last-child {
+  margin-bottom: 0;
+}
+
+// Tables get a touch of style cayman doesn't already give them.
+.main-content table {
+  display: table;
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.main-content table th,
+.main-content table td {
+  border-bottom: 1px solid #d1d9e0;
+  padding: 0.5rem 0.75rem;
+  text-align: left;
+}
+
+.main-content table th {
+  background: #f6f8fa;
+}
