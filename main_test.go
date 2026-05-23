@@ -138,7 +138,10 @@ func TestOutputPathFor(t *testing.T) {
 }
 
 func TestRenderStepIndentAndDashAlignment(t *testing.T) {
-	got := renderStep(Task{Name: "test", Step: "Run tests", Run: "task test"}, "      ")
+	got, err := renderStep(Task{Name: "test", Step: "Run tests", Run: "task test"}, "      ")
+	if err != nil {
+		t.Fatal(err)
+	}
 	want := "      - name: Run tests\n        run: task test"
 	if got != want {
 		t.Errorf("renderStep mismatch:\nwant:\n%s\ngot:\n%s", want, got)
@@ -147,7 +150,10 @@ func TestRenderStepIndentAndDashAlignment(t *testing.T) {
 
 func TestRenderStepQuotesValuesWithSpecialChars(t *testing.T) {
 	// A step name containing a colon must round-trip through valid YAML.
-	got := renderStep(Task{Step: "Run: integration tests", Run: "task it"}, "")
+	got, err := renderStep(Task{Step: "Run: integration tests", Run: "task it"}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
 	if !strings.Contains(got, "name: 'Run: integration tests'") &&
 		!strings.Contains(got, `name: "Run: integration tests"`) {
 		t.Errorf("expected quoted name when value contains ':', got:\n%s", got)
@@ -155,10 +161,13 @@ func TestRenderStepQuotesValuesWithSpecialChars(t *testing.T) {
 }
 
 func TestRenderBlockBlankLineBetweenSteps(t *testing.T) {
-	got := renderBlock([]Task{
+	got, err := renderBlock([]Task{
 		{Step: "first", Run: "task first"},
 		{Step: "second", Run: "task second"},
 	}, "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
 	want := "  - name: first\n    run: task first\n\n  - name: second\n    run: task second"
 	if got != want {
 		t.Errorf("renderBlock mismatch:\nwant:\n%q\ngot:\n%q", want, got)
@@ -170,7 +179,10 @@ func TestRenderTemplateSubstitutesPlaceholder(t *testing.T) {
 	tasks := map[string][]Task{
 		"test": {{Name: "test", Step: "Run tests", Run: "task test"}},
 	}
-	out, refs := renderTemplate(".task2ci/workflows/ci.yaml", template, tasks)
+	out, refs, err := renderTemplate(".task2ci/workflows/ci.yaml", template, tasks)
+	if err != nil {
+		t.Fatal(err)
+	}
 	s := string(out)
 	if !strings.Contains(s, "      - name: Run tests") {
 		t.Errorf("expected substituted step at correct indent, got:\n%s", s)
@@ -188,7 +200,10 @@ func TestRenderTemplateSubstitutesPlaceholder(t *testing.T) {
 
 func TestRenderTemplateRemovesOrphanPlaceholder(t *testing.T) {
 	template := []byte("steps:\n  - uses: x\n  # @ci: unknown\n  - run: after\n")
-	out, _ := renderTemplate("t.yaml", template, map[string][]Task{})
+	out, _, err := renderTemplate("t.yaml", template, map[string][]Task{})
+	if err != nil {
+		t.Fatal(err)
+	}
 	s := string(out)
 	if strings.Contains(s, "# @ci: unknown") {
 		t.Errorf("orphan placeholder should be removed, still present:\n%s", s)
@@ -208,7 +223,10 @@ func TestRenderTemplateSeveralStepsBlankSeparated(t *testing.T) {
 			{Step: "c", Run: "task c"},
 		},
 	}
-	out, _ := renderTemplate("t.yaml", template, tasks)
+	out, _, err := renderTemplate("t.yaml", template, tasks)
+	if err != nil {
+		t.Fatal(err)
+	}
 	s := string(out)
 	for _, want := range []string{
 		"  - name: a\n    run: task a",
@@ -359,7 +377,10 @@ tasks:
   plain:
     cmd: echo
 `)
-	got := readTasks(path, "task")
+	got, err := readTasks(path, "task")
+	if err != nil {
+		t.Fatal(err)
+	}
 	if len(got["test"]) != 2 {
 		t.Errorf("expected 2 tasks for 'test', got %d", len(got["test"]))
 	}
@@ -434,13 +455,79 @@ func TestRunInitWritesGoFlavor(t *testing.T) {
 	if err := os.WriteFile("go.mod", []byte("module x\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	runInit()
+	if err := runInit(); err != nil {
+		t.Fatal(err)
+	}
 	data, err := os.ReadFile(initDefaultPath)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(string(data), "actions/setup-go@v5") {
 		t.Errorf("expected Go template, got:\n%s", data)
+	}
+}
+
+func TestRunInitRefusesToOverwrite(t *testing.T) {
+	dir := t.TempDir()
+	chdir(t, dir)
+	if err := os.MkdirAll(filepath.Dir(initDefaultPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(initDefaultPath, []byte("---\nname: pre-existing\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	err := runInit()
+	if err == nil {
+		t.Fatal("expected error when file exists, got nil")
+	}
+	if !strings.Contains(err.Error(), "already exists") {
+		t.Errorf("expected 'already exists' message, got %v", err)
+	}
+}
+
+func TestReadTasksMissingFile(t *testing.T) {
+	_, err := readTasks(filepath.Join(t.TempDir(), "does-not-exist.yaml"), "task")
+	if err == nil {
+		t.Fatal("expected error for missing file, got nil")
+	}
+	if !strings.Contains(err.Error(), "reading") {
+		t.Errorf("expected error to mention 'reading', got %v", err)
+	}
+}
+
+func TestReadTasksInvalidYAML(t *testing.T) {
+	tmp := t.TempDir()
+	path := filepath.Join(tmp, "Taskfile.yaml")
+	writeFile(t, path, "this: is\n  not: valid yaml: \"")
+	_, err := readTasks(path, "task")
+	if err == nil {
+		t.Fatal("expected parse error, got nil")
+	}
+	if !strings.Contains(err.Error(), "parsing") {
+		t.Errorf("expected 'parsing' in error, got %v", err)
+	}
+}
+
+func TestReadTasksNoTasksBlock(t *testing.T) {
+	tmp := t.TempDir()
+	path := filepath.Join(tmp, "Taskfile.yaml")
+	writeFile(t, path, "version: '3'\nincludes:\n  other: ./Other.yaml\n")
+	_, err := readTasks(path, "task")
+	if err == nil {
+		t.Fatal("expected error for missing tasks block, got nil")
+	}
+	if !strings.Contains(err.Error(), "tasks") {
+		t.Errorf("expected 'tasks' in error, got %v", err)
+	}
+}
+
+func TestRunFixMissingTemplate(t *testing.T) {
+	_, err := runFix([]string{"/path/that/does/not/exist.yaml"}, map[string][]Task{})
+	if err == nil {
+		t.Fatal("expected error for missing template, got nil")
+	}
+	if !strings.Contains(err.Error(), "reading template") {
+		t.Errorf("expected 'reading template' in error, got %v", err)
 	}
 }
 
@@ -453,7 +540,10 @@ func TestRunFixRemovesOrphanOnly(t *testing.T) {
   # @ci: drop
 `)
 	tasks := map[string][]Task{"keep": {{Name: "x"}}}
-	n := runFix([]string{tpath}, tasks)
+	n, err := runFix([]string{tpath}, tasks)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if n != 1 {
 		t.Errorf("expected 1 removal, got %d", n)
 	}
