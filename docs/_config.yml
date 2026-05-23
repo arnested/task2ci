@@ -1,0 +1,16 @@
+---
+title: task2ci
+description: >-
+  Generate GitHub Actions workflows from your Taskfile, so the commands you
+  run locally are the same ones CI runs.
+theme: jekyll-theme-cayman
+
+# Make the README and AGENTS accessible at /README.html etc. without
+# duplicating content, while keeping index.md as the polished landing page.
+include:
+  - .gitignore
+
+# Don't ship build artefacts or templates as part of the site.
+exclude:
+  - Gemfile
+  - Gemfile.lock

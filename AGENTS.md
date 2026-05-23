@@ -32,6 +32,17 @@ pre-commit hook at `.githooks/pre-commit` runs the same thing.
   - To change them: edit `.task2ci/workflows/<name>.yaml` (the template)
     and/or `Taskfile.yaml`, then run `go tool task generate`.
 
+### Docs site under `/docs`
+
+`/docs/` is a Jekyll site that GitHub Pages publishes. Source: `index.md`,
+config in `_config.yml`, styling overrides in `assets/css/style.scss`.
+Theme: `jekyll-theme-cayman` (built into GitHub Pages, no Gemfile needed).
+
+`index.md` mirrors the README but uses an inline-HTML `<div class="callout-caution">`
+for the caution box — kramdown (Jekyll's markdown processor) doesn't render
+GitHub's `> [!CAUTION]` alert syntax. If the README's caution changes,
+update `docs/index.md` in lockstep.
+
 ### Exception: hand-written workflows alongside generated ones
 
 `.github/workflows/dependabot-regen.yaml` is hand-written. It triggers on
