@@ -174,10 +174,8 @@ goes directly into the template in GHA's native syntax.
 
 Multiple template files produce multiple workflow files:
 
-| Template | Output |
-|----------|--------|
-| `.task2ci/workflows/ci.yaml`      | `.github/workflows/ci.yaml`      |
-| `.task2ci/workflows/release.yaml` | `.github/workflows/release.yaml` |
+- `.task2ci/workflows/ci.yaml` → `.github/workflows/ci.yaml`
+- `.task2ci/workflows/release.yaml` → `.github/workflows/release.yaml`
 
 Each is independent.
 
@@ -198,14 +196,20 @@ them before merge.
 task2ci [flags]
 ```
 
-| Flag | Behavior |
-|------|----------|
-| _(none)_ | Render each template under `.task2ci/workflows/` to `.github/workflows/<name>.yaml`. |
-| `-check` | Compare what would be generated now against the on-disk workflow files. Exit non-zero on any drift or orphan tag/placeholder. Used in CI. |
-| `-fix` | Remove orphan `# @ci: <tag>` placeholders (tags no task uses) from templates in place. Doesn't regenerate workflows; run `task2ci` after. |
-| `-init` | Write a minimal starter template at `.task2ci/workflows/ci.yaml`. Refuses to overwrite. |
-| `-license` | Print the license (MIT) and exit. |
-| `-taskfile <path>` | Path to a Taskfile. May be repeated to scan multiple files. Default: auto-discover (`Taskfile.yml` → `taskfile.yml` → `Taskfile.yaml` → `taskfile.yaml` → `.dist` variants). |
+- **_(no flags)_** — Render each template under `.task2ci/workflows/` to
+  `.github/workflows/<name>.yaml`.
+- **`-check`** — Compare what would be generated now against the on-disk
+  workflow files. Exit non-zero on any drift or orphan tag/placeholder.
+  Used in CI.
+- **`-fix`** — Remove orphan `# @ci: <tag>` placeholders (tags no task
+  uses) from templates in place. Doesn't regenerate workflows; run
+  `task2ci` after.
+- **`-init`** — Write a minimal starter template at
+  `.task2ci/workflows/ci.yaml`. Refuses to overwrite.
+- **`-license`** — Print the license (MIT) and exit.
+- **`-taskfile <path>`** — Path to a Taskfile. May be repeated to scan
+  multiple files. Default: auto-discover (`Taskfile.yml` →
+  `taskfile.yml` → `Taskfile.yaml` → `taskfile.yaml` → `.dist` variants).
 
 `-check`, `-fix`, and `-init` are mutually exclusive.
 
