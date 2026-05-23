@@ -6,32 +6,48 @@
 #
 # Purpose: when Dependabot opens a PR bumping an action version in one of our
 # templates, regenerate the workflows on the PR branch so `-check` passes.
-# Without this, every Dependabot PR would land red until a human pulls,
-# regenerates locally, and pushes.
+#
+# Requires a repo secret `WORKFLOWS_PAT` — a fine-grained PAT scoped to this
+# repo with:
+#   - Contents: Read and write
+#   - Workflows: Read and write
+#
+# GITHUB_TOKEN can't push files under .github/workflows/ regardless of the
+# `permissions:` block, so a PAT is the only viable path.
 
 name: Regenerate workflows for Dependabot
 on:
   pull_request:
-
-permissions:
-  contents: write
 
 jobs:
   regen:
     if: github.actor == 'dependabot[bot]'
     runs-on: ubuntu-24.04
     steps:
+      - name: Verify WORKFLOWS_PAT is set
+        env:
+          PAT: ${{ secrets.WORKFLOWS_PAT }}
+        run: |
+          if [ -z "$PAT" ]; then
+            echo "::error::WORKFLOWS_PAT secret is not set."
+            echo "Create a fine-grained PAT with Contents: Read+Write and"
+            echo "Workflows: Read+Write scoped to this repo, then add it as"
+            echo "a repository secret named WORKFLOWS_PAT."
+            exit 1
+          fi
+
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.head_ref }}
-          # Use a token that can push; default GITHUB_TOKEN works for
-          # same-repo Dependabot PRs given the workflow-level write perm.
-          token: ${{ secrets.GITHUB_TOKEN }}
+          token: ${{ secrets.WORKFLOWS_PAT }}
+
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
+
       - name: Regenerate workflows
         run: go tool task2ci
+
       - name: Commit and push if anything changed
         run: |
           if git diff --quiet; then
