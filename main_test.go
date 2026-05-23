@@ -557,6 +557,171 @@ func TestRunFixRemovesOrphanOnly(t *testing.T) {
 	}
 }
 
+// ---------- run() tests (in-process) ----------
+
+func runCapture(t *testing.T, args ...string) (string, string, error) {
+	t.Helper()
+	var stdout, stderr bytes.Buffer
+	err := run(args, &stdout, &stderr)
+	return stdout.String(), stderr.String(), err
+}
+
+func TestRunLicensePrintsAndShortCircuits(t *testing.T) {
+	// Run in an empty dir so a missing Taskfile would otherwise be fatal.
+	chdir(t, t.TempDir())
+	out, _, err := runCapture(t, "-license")
+	if err != nil {
+		t.Fatalf("expected nil error, got %v", err)
+	}
+	if !strings.Contains(out, "MIT License") {
+		t.Errorf("expected MIT license in stdout, got: %s", out)
+	}
+}
+
+func TestRunMutuallyExclusiveFlags(t *testing.T) {
+	chdir(t, t.TempDir())
+	_, _, err := runCapture(t, "-check", "-fix")
+	if err == nil {
+		t.Fatal("expected error when combining -check and -fix, got nil")
+	}
+	if !strings.Contains(err.Error(), "mutually exclusive") {
+		t.Errorf("expected mutual-exclusion message, got %v", err)
+	}
+}
+
+func TestRunNoTaskfile(t *testing.T) {
+	chdir(t, t.TempDir())
+	_, _, err := runCapture(t)
+	if err == nil {
+		t.Fatal("expected error when no Taskfile present, got nil")
+	}
+	if !strings.Contains(err.Error(), "no Taskfile found") {
+		t.Errorf("expected 'no Taskfile found', got %v", err)
+	}
+}
+
+func TestRunMissingTaskfileFlag(t *testing.T) {
+	chdir(t, t.TempDir())
+	_, _, err := runCapture(t, "-taskfile", "nope.yaml")
+	if err == nil {
+		t.Fatal("expected error for missing -taskfile target, got nil")
+	}
+	if !strings.Contains(err.Error(), "nope.yaml") {
+		t.Errorf("expected error to name the missing path, got %v", err)
+	}
+}
+
+func TestRunNoTemplates(t *testing.T) {
+	dir := t.TempDir()
+	chdir(t, dir)
+	writeFile(t, "Taskfile.yaml", "version: '3'\ntasks:\n  noop:\n    cmd: echo\n")
+	_, _, err := runCapture(t)
+	if err == nil {
+		t.Fatal("expected error when no templates exist, got nil")
+	}
+	if !strings.Contains(err.Error(), "no templates found") {
+		t.Errorf("expected 'no templates found', got %v", err)
+	}
+}
+
+func TestRunHappyPathWritesWorkflow(t *testing.T) {
+	dir := t.TempDir()
+	chdir(t, dir)
+	writeFile(t, "Taskfile.yaml", `version: '3'
+tasks:
+  # @ci: test
+  test:
+    cmd: go test ./...
+`)
+	writeFile(t, ".task2ci/workflows/ci.yaml", `---
+name: ci
+on: [push, pull_request]
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    steps:
+      # @ci: test
+`)
+	stdout, _, err := runCapture(t)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(stdout, "Wrote .github/workflows/ci.yaml") {
+		t.Errorf("expected success message, got: %s", stdout)
+	}
+	data, err := os.ReadFile(".github/workflows/ci.yaml")
+	if err != nil {
+		t.Fatalf("expected output: %v", err)
+	}
+	if !strings.Contains(string(data), "- name: test") {
+		t.Errorf("expected substituted step, got:\n%s", data)
+	}
+}
+
+func TestRunCheckHappyPath(t *testing.T) {
+	dir := t.TempDir()
+	chdir(t, dir)
+	writeFile(t, "Taskfile.yaml", `version: '3'
+tasks:
+  # @ci: test
+  test:
+    cmd: go test ./...
+`)
+	writeFile(t, ".task2ci/workflows/ci.yaml", `---
+name: ci
+on: [push, pull_request]
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    steps:
+      # @ci: test
+`)
+	if _, _, err := runCapture(t); err != nil {
+		t.Fatalf("initial generate failed: %v", err)
+	}
+	stdout, _, err := runCapture(t, "-check")
+	if err != nil {
+		t.Fatalf("-check should pass on clean tree: %v", err)
+	}
+	if !strings.Contains(stdout, "up to date") {
+		t.Errorf("expected up-to-date message, got: %s", stdout)
+	}
+}
+
+func TestRunCheckFailsOnDrift(t *testing.T) {
+	dir := t.TempDir()
+	chdir(t, dir)
+	writeFile(t, "Taskfile.yaml", `version: '3'
+tasks:
+  # @ci: test
+  test:
+    cmd: go test ./...
+`)
+	writeFile(t, ".task2ci/workflows/ci.yaml", `---
+jobs:
+  j:
+    runs-on: ubuntu-24.04
+    steps:
+      # @ci: test
+`)
+	if _, _, err := runCapture(t); err != nil {
+		t.Fatalf("initial generate failed: %v", err)
+	}
+	// Tamper with the generated file.
+	path := ".github/workflows/ci.yaml"
+	data, _ := os.ReadFile(path)
+	if err := os.WriteFile(path, append(data, []byte("# tampered\n")...), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, _, err := runCapture(t, "-check")
+	if err == nil {
+		t.Fatal("expected drift error, got nil")
+	}
+	if !strings.Contains(err.Error(), "drift") {
+		t.Errorf("expected 'drift' in error, got %v", err)
+	}
+}
+
 // ---------- integration (subprocess) ----------
 
 var (
@@ -1057,7 +1222,7 @@ func TestIntegrationNoTaskfileIsFatal(t *testing.T) {
 	if code == 0 {
 		t.Fatalf("expected non-zero exit when no Taskfile present")
 	}
-	if !strings.Contains(stderr, "No Taskfile found") {
+	if !strings.Contains(stderr, "no Taskfile found") {
 		t.Errorf("expected helpful message, got: %s", stderr)
 	}
 }
@@ -1078,7 +1243,7 @@ func TestIntegrationLicenseFlag(t *testing.T) {
 		}
 	}
 	// -license should short-circuit: works even when no Taskfile or
-	// template is present in cwd (no fatal "No Taskfile found").
+	// template is present in cwd (no fatal "no Taskfile found").
 	if strings.Contains(stderr, "No Taskfile") {
 		t.Errorf("-license should short-circuit, not require a Taskfile; stderr=%s", stderr)
 	}
@@ -1289,7 +1454,7 @@ tasks:
 	if code == 0 {
 		t.Fatalf("expected non-zero exit when no templates exist, got 0")
 	}
-	if !strings.Contains(stderr, "No templates found") {
+	if !strings.Contains(stderr, "no templates found") {
 		t.Errorf("expected helpful message, got: %s", stderr)
 	}
 }

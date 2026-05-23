@@ -187,17 +187,32 @@ func runFix(templates []string, tasksByTag map[string][]Task) (int, error) {
 }
 
 func main() {
-	checkPtr := flag.Bool("check", false, "Fail if any generated workflow has drifted from its template")
-	fixPtr := flag.Bool("fix", false, "Remove orphan `# @ci: <tag>` placeholders from templates (in place)")
-	initPtr := flag.Bool("init", false, "Write a minimal starter template at "+initDefaultPath+" and exit")
-	licensePtr := flag.Bool("license", false, "Print the license and exit")
+	if err := run(os.Args[1:], os.Stdout, os.Stderr); err != nil {
+		log.Fatal(err)
+	}
+}
+
+// run is the testable entry point. It parses args via a fresh FlagSet (so
+// concurrent or repeated calls don't share state), and returns a non-nil
+// error on any failure path that main() would have called log.Fatal on.
+//
+// stdout receives success / info output. stderr receives warnings.
+func run(args []string, stdout, stderr io.Writer) error {
+	fs := flag.NewFlagSet("task2ci", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	checkPtr := fs.Bool("check", false, "Fail if any generated workflow has drifted from its template")
+	fixPtr := fs.Bool("fix", false, "Remove orphan `# @ci: <tag>` placeholders from templates (in place)")
+	initPtr := fs.Bool("init", false, "Write a minimal starter template at "+initDefaultPath+" and exit")
+	licensePtr := fs.Bool("license", false, "Print the license and exit")
 	var taskfiles stringList
-	flag.Var(&taskfiles, "taskfile", "Path to a Taskfile. May be repeated. Default: auto-discover Taskfile.yml/.yaml etc.")
-	flag.Parse()
+	fs.Var(&taskfiles, "taskfile", "Path to a Taskfile. May be repeated. Default: auto-discover Taskfile.yml/.yaml etc.")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
 
 	if *licensePtr {
-		_, _ = os.Stdout.Write(licenseText)
-		return
+		_, _ = stdout.Write(licenseText)
+		return nil
 	}
 
 	exclusive := 0
@@ -207,27 +222,24 @@ func main() {
 		}
 	}
 	if exclusive > 1 {
-		log.Fatalf("-check, -fix, and -init are mutually exclusive")
+		return fmt.Errorf("-check, -fix, and -init are mutually exclusive")
 	}
 
 	if *initPtr {
-		if err := runInit(); err != nil {
-			log.Fatal(err)
-		}
-		return
+		return runInit()
 	}
 
 	if len(taskfiles) == 0 {
 		found := findTaskfile()
 		if found == "" {
-			log.Fatalf("No Taskfile found. Looked for (in order): %s. Use -taskfile to specify a path.",
+			return fmt.Errorf("no Taskfile found. Looked for (in order): %s. Use -taskfile to specify a path",
 				strings.Join(taskfileSearchOrder, ", "))
 		}
 		taskfiles = stringList{found}
 	} else {
 		for _, p := range taskfiles {
 			if _, err := os.Stat(p); err != nil {
-				log.Fatalf("Taskfile %q (from -taskfile): %v", p, err)
+				return fmt.Errorf("taskfile %q (from -taskfile): %w", p, err)
 			}
 		}
 	}
@@ -242,12 +254,12 @@ func main() {
 	for _, path := range taskfiles {
 		tasks, err := readTasks(path, taskCmd)
 		if err != nil {
-			log.Fatal(err)
+			return err
 		}
 		for tag, tList := range tasks {
 			for _, t := range tList {
 				if prev, dup := seenTasks[t.Name]; dup {
-					_, _ = fmt.Fprintf(os.Stderr,
+					_, _ = fmt.Fprintf(stderr,
 						"⚠️  Task %q appears in %s and %s; the generated `task %s` step is ambiguous unless go-task can dispatch it deterministically (e.g. via aliases or includes).\n",
 						t.Name, prev, path, t.Name)
 				} else {
@@ -260,17 +272,15 @@ func main() {
 
 	templates, err := listTemplates(TemplateDir)
 	if err != nil {
-		log.Fatalf("Error listing templates under %s: %v", TemplateDir, err)
+		return fmt.Errorf("listing templates under %s: %w", TemplateDir, err)
 	}
 	if len(templates) == 0 {
-		log.Fatalf("No templates found under %s/. Create at least one workflow template (with `# @ci: <tag>` placeholders) before running task2ci, or run `task2ci -init` to scaffold one.", TemplateDir)
+		return fmt.Errorf("no templates found under %s/. Create at least one workflow template (with `# @ci: <tag>` placeholders) before running task2ci, or run `task2ci -init` to scaffold one", TemplateDir)
 	}
 
 	if *fixPtr {
-		if _, err := runFix(templates, tasksByTag); err != nil {
-			log.Fatal(err)
-		}
-		return
+		_, err := runFix(templates, tasksByTag)
+		return err
 	}
 
 	// Render each template to its target path, collecting which tags any
@@ -280,11 +290,11 @@ func main() {
 	for _, tpath := range templates {
 		data, err := os.ReadFile(tpath)
 		if err != nil {
-			log.Fatalf("Error reading template %s: %v", tpath, err)
+			return fmt.Errorf("reading template %s: %w", tpath, err)
 		}
 		out, refs, err := renderTemplate(tpath, data, tasksByTag)
 		if err != nil {
-			log.Fatal(err)
+			return err
 		}
 		for _, r := range refs {
 			usedTags[r] = true
@@ -292,7 +302,7 @@ func main() {
 		rendered[outputPathFor(tpath)] = out
 	}
 
-	orphans := warnOrphans(os.Stderr, tasksByTag, usedTags)
+	orphans := warnOrphans(stderr, tasksByTag, usedTags)
 
 	outPaths := make([]string, 0, len(rendered))
 	for p := range rendered {
@@ -305,7 +315,7 @@ func main() {
 		for _, p := range outPaths {
 			existing, err := os.ReadFile(p)
 			if err != nil {
-				log.Fatalf("Check failed: could not read existing workflow %s: %v", p, err)
+				return fmt.Errorf("check failed: could not read existing workflow %s: %w", p, err)
 			}
 			if !bytes.Equal(existing, rendered[p]) {
 				drifted = append(drifted, p)
@@ -319,21 +329,22 @@ func main() {
 			if len(drifted) > 0 {
 				msgs = append(msgs, fmt.Sprintf("drift in: %s", strings.Join(drifted, ", ")))
 			}
-			log.Fatalf("❌ ERROR: %s. Fix the issues and run task2ci locally before committing.", strings.Join(msgs, "; "))
+			return fmt.Errorf("❌ ERROR: %s. Fix the issues and run task2ci locally before committing", strings.Join(msgs, "; "))
 		}
-		fmt.Println("✅ Generated workflows are up to date.")
-		return
+		_, _ = fmt.Fprintln(stdout, "✅ Generated workflows are up to date.")
+		return nil
 	}
 
 	if err := os.MkdirAll(OutputDir, 0o755); err != nil {
-		log.Fatalf("Error creating %s: %v", OutputDir, err)
+		return fmt.Errorf("creating %s: %w", OutputDir, err)
 	}
 	for _, p := range outPaths {
 		if err := os.WriteFile(p, rendered[p], 0o644); err != nil {
-			log.Fatalf("Error writing %s: %v", p, err)
+			return fmt.Errorf("writing %s: %w", p, err)
 		}
-		fmt.Printf("✅ Wrote %s\n", p)
+		_, _ = fmt.Fprintf(stdout, "✅ Wrote %s\n", p)
 	}
+	return nil
 }
 
 // listTemplates returns paths to *.yaml and *.yml files under dir (sorted).
