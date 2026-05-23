@@ -738,11 +738,15 @@ func TestIntegrationNoTaskfileIsFatal(t *testing.T) {
 	}
 }
 
-func TestIntegrationInitWritesStarterTemplate(t *testing.T) {
+func TestIntegrationInitGoFlavorWithGoMod(t *testing.T) {
 	tmp := t.TempDir()
+	writeFile(t, filepath.Join(tmp, "go.mod"), "module example.com/x\n\ngo 1.24\n")
 	stdout, stderr, code := runBinary(t, tmp, "-init")
 	if code != 0 {
 		t.Fatalf("-init failed: code=%d stderr=%s stdout=%s", code, stderr, stdout)
+	}
+	if !strings.Contains(stdout, "Go starter") {
+		t.Errorf("expected 'Go starter' in stdout, got: %s", stdout)
 	}
 	path := filepath.Join(tmp, ".task2ci/workflows/ci.yaml")
 	data, err := os.ReadFile(path)
@@ -755,11 +759,51 @@ func TestIntegrationInitWritesStarterTemplate(t *testing.T) {
 		"runs-on: ubuntu-24.04",
 		"actions/checkout@v4",
 		"actions/setup-go@v5",
+		"go tool task2ci -check",
 		"# @ci: test",
 	} {
 		if !strings.Contains(content, want) {
-			t.Errorf("init template missing %q\n%s", want, content)
+			t.Errorf("Go init template missing %q\n%s", want, content)
 		}
+	}
+	if strings.Contains(content, "go-task/setup-task") {
+		t.Errorf("Go template should not include setup-task (go-task is via go tool):\n%s", content)
+	}
+}
+
+func TestIntegrationInitGenericFlavorWithoutGoMod(t *testing.T) {
+	tmp := t.TempDir()
+	stdout, stderr, code := runBinary(t, tmp, "-init")
+	if code != 0 {
+		t.Fatalf("-init failed: code=%d stderr=%s stdout=%s", code, stderr, stdout)
+	}
+	if !strings.Contains(stdout, "generic starter") {
+		t.Errorf("expected 'generic starter' in stdout, got: %s", stdout)
+	}
+	path := filepath.Join(tmp, ".task2ci/workflows/ci.yaml")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("expected template at %s: %v", path, err)
+	}
+	content := string(data)
+	for _, want := range []string{
+		"name: ci",
+		"runs-on: ubuntu-24.04",
+		"actions/checkout@v4",
+		"go-task/setup-task@v2",
+		"go install arnested.dk/go/task2ci@latest",
+		"task2ci -check",
+		"# @ci: test",
+	} {
+		if !strings.Contains(content, want) {
+			t.Errorf("generic init template missing %q\n%s", want, content)
+		}
+	}
+	if strings.Contains(content, "uses: actions/setup-go") {
+		t.Errorf("generic template should not USE actions/setup-go (a comment may mention it):\n%s", content)
+	}
+	if strings.Contains(content, "go tool task2ci") {
+		t.Errorf("generic template should use plain `task2ci`, not `go tool task2ci`:\n%s", content)
 	}
 }
 
