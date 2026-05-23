@@ -29,10 +29,12 @@ quietly diverge.
 
 ## Why
 
-A typical Go project ends up with two parallel lists of commands:
+Any project that uses [go-task](https://taskfile.dev/) ends up with two
+parallel lists of commands:
 
-- `Taskfile.yaml` — what developers run locally (`task test`, `task lint`)
-- `.github/workflows/ci.yaml` — what CI runs (`go test ./...`, `golangci-lint run`)
+- `Taskfile.yaml` — what developers run locally (e.g. `task test`, `task lint`)
+- `.github/workflows/ci.yaml` — what CI runs (the same commands, restated
+  by hand in YAML)
 
 These drift. Someone adds a new check to the Taskfile but forgets the
 workflow, or vice versa, and "works on my machine" creeps in.
@@ -44,19 +46,29 @@ template is plain GitHub Actions YAML, so you get full validation from
 yaml-language-server, actionlint, and any other GHA tooling — task2ci itself
 does not model setup steps, runners, or any other workflow structure.
 
+The tool is language-agnostic; the Quick start below uses a Go example
+because that's the dogfood, but the only Go-specific behavior is an
+[optional optimization](#how-it-adapts-to-your-toolchain) that uses
+`go tool task` when `go-task` is registered as a Go tool dependency.
+
 ## Quick start
 
 In a project that already has a `Taskfile.yaml`:
 
 ```sh
-# 1. Install task2ci as a Go tool dependency (Go 1.24+)
+# Install task2ci. Go projects can register it as a tool dep:
 go get -tool arnested.dk/go/task2ci
 
-# 2. Scaffold a starter template
-go tool task2ci -init
+# Anywhere else, install the binary with `go install` or download a release
+# build, then make sure `task2ci` is on the runner's PATH.
+
+# Scaffold a starter template:
+task2ci -init
 ```
 
-The starter template at `.task2ci/workflows/ci.yaml` looks like this:
+The starter template at `.task2ci/workflows/ci.yaml` looks like this — it's
+plain GitHub Actions YAML, so swap the setup steps for whatever your project
+needs (setup-node, setup-python, system packages, …):
 
 ```yaml
 ---
@@ -68,9 +80,13 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
+
+      # Set up the toolchain your tasks need. This Go example uses
+      # actions/setup-go; replace with what your project needs.
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
+
       - name: Check generated CI is up to date
         run: go tool task2ci -check
       # @ci: test
@@ -101,7 +117,7 @@ tasks:
 Generate:
 
 ```sh
-go tool task2ci
+task2ci    # or `go tool task2ci` if you registered it as a tool dep
 ```
 
 You get `.github/workflows/ci.yaml`, identical to the template except the
@@ -116,7 +132,7 @@ You get `.github/workflows/ci.yaml`, identical to the template except the
 ```
 
 Commit `Taskfile.yaml`, the template, and the generated workflow. CI runs
-`go tool task2ci -check` (which the template includes) on every push, so any
+`task2ci -check` (which the template includes) on every push, so any
 drift fails the build.
 
 ## Annotation syntax
@@ -194,16 +210,21 @@ task2ci [flags]
 
 ## How it adapts to your toolchain
 
-`task2ci` inspects your `go.mod` and picks the most direct path it can.
+The default behavior is language-agnostic: inserted steps run
+`task <task-name>`, and the user's template installs `task` however it
+wants (the [go-task/setup-task](https://github.com/go-task/setup-task)
+action is the typical choice).
 
-### `go-task` as a tool dependency
+The one Go-specific optimization: if `task2ci` finds a `go.mod` in the
+working directory that registers `github.com/go-task/task/v3/cmd/task` as
+a `tool` directive (Go 1.24+ tool dependencies), the generated `run:` lines
+use `go tool task <name>` instead. CI then uses the exact go-task version
+pinned in your `go.mod` — no separate install step needed (though you
+still need `actions/setup-go` in your template).
 
-If `github.com/go-task/task/v3/cmd/task` appears as a Go `tool` directive in
-`go.mod`, the generated `run:` lines use `go tool task <name>` instead of
-`task <name>`. This relies on Go 1.24+ tool dependencies and means CI uses
-the exact go-task version pinned in your project — no separate install step
-needed (though you still need to install Go on the runner, via the
-`actions/setup-go` step you put in your template).
+Non-Go projects: just include
+`uses: go-task/setup-task@v2` in the template; the `run: task <name>`
+lines work the same way.
 
 ## Source
 
