@@ -56,7 +56,7 @@
           },
           "runs-on": {
             "type": "string",
-            "description": "GitHub Actions runner label (e.g. ubuntu-latest, macos-14).",
+            "description": "GitHub Actions runner label. Pin a specific version (e.g. ubuntu-24.04, macos-14) rather than a floating tag like ubuntu-latest to avoid surprise breakage on runner upgrades.",
             "minLength": 1
           }
         }

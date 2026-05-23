@@ -306,7 +306,7 @@ tags:
   # test:
   #   workflow: ci          # output file: .github/workflows/ci.yml (default: taskfile)
   #   job: test             # job name within the workflow (default: tag name)
-  #   runs-on: ubuntu-latest
+  #   runs-on: ubuntu-24.04 # pin a specific runner version, not ubuntu-latest
 `
 
 // validateConfigAgainstSchema validates the .task2ci.yml on disk against the

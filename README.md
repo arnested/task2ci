@@ -55,10 +55,10 @@ actions:
 tags:
   test:
     workflow: ci
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
   build:
     workflow: ci
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
 ```
 
 Annotate the tasks you want in CI:
@@ -231,11 +231,11 @@ tags:
   ci-test:
     workflow: ci
     job: test
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
   release-build:
     workflow: release
     job: build
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
 ```
 
 Produces both `.github/workflows/ci.yml` and `.github/workflows/release.yml`.
