@@ -738,6 +738,28 @@ func TestIntegrationNoTaskfileIsFatal(t *testing.T) {
 	}
 }
 
+func TestIntegrationLicenseFlag(t *testing.T) {
+	tmp := t.TempDir()
+	stdout, stderr, code := runBinary(t, tmp, "-license")
+	if code != 0 {
+		t.Fatalf("-license should exit 0, got code=%d stderr=%s", code, stderr)
+	}
+	for _, want := range []string{
+		"MIT License",
+		"Copyright (c) 2026 Arne Jørgensen",
+		"THE SOFTWARE IS PROVIDED \"AS IS\"",
+	} {
+		if !strings.Contains(stdout, want) {
+			t.Errorf("license output missing %q\n%s", want, stdout)
+		}
+	}
+	// -license should short-circuit: works even when no Taskfile or
+	// template is present in cwd (no fatal "No Taskfile found").
+	if strings.Contains(stderr, "No Taskfile") {
+		t.Errorf("-license should short-circuit, not require a Taskfile; stderr=%s", stderr)
+	}
+}
+
 func TestIntegrationInitGoFlavorWithGoMod(t *testing.T) {
 	tmp := t.TempDir()
 	writeFile(t, filepath.Join(tmp, "go.mod"), "module example.com/x\n\ngo 1.24\n")

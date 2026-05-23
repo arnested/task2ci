@@ -204,6 +204,7 @@ task2ci [flags]
 | `-check` | Compare what would be generated now against the on-disk workflow files. Exit non-zero on any drift or orphan tag/placeholder. Used in CI. |
 | `-fix` | Remove orphan `# @ci: <tag>` placeholders (tags no task uses) from templates in place. Doesn't regenerate workflows; run `task2ci` after. |
 | `-init` | Write a minimal starter template at `.task2ci/workflows/ci.yaml`. Refuses to overwrite. |
+| `-license` | Print the license (MIT) and exit. |
 | `-taskfile <path>` | Path to a Taskfile. May be repeated to scan multiple files. Default: auto-discover (`Taskfile.yml` → `taskfile.yml` → `Taskfile.yaml` → `taskfile.yaml` → `.dist` variants). |
 
 `-check`, `-fix`, and `-init` are mutually exclusive.
@@ -229,3 +230,32 @@ lines work the same way.
 ## Source
 
 [github.com/arnested/task2ci](https://github.com/arnested/task2ci)
+
+## License
+
+MIT.
+
+```text
+MIT License
+===========
+
+Copyright (c) 2026 Arne Jørgensen
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+```

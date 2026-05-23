@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	_ "embed"
 	"flag"
 	"fmt"
 	"log"
@@ -13,6 +14,9 @@ import (
 
 	"gopkg.in/yaml.v3"
 )
+
+//go:embed LICENSE.md
+var licenseText []byte
 
 const (
 	OutputDir      = ".github/workflows"
@@ -184,9 +188,15 @@ func main() {
 	checkPtr := flag.Bool("check", false, "Fail if any generated workflow has drifted from its template")
 	fixPtr := flag.Bool("fix", false, "Remove orphan `# @ci: <tag>` placeholders from templates (in place)")
 	initPtr := flag.Bool("init", false, "Write a minimal starter template at "+initDefaultPath+" and exit")
+	licensePtr := flag.Bool("license", false, "Print the license and exit")
 	var taskfiles stringList
 	flag.Var(&taskfiles, "taskfile", "Path to a Taskfile. May be repeated. Default: auto-discover Taskfile.yml/.yaml etc.")
 	flag.Parse()
+
+	if *licensePtr {
+		_, _ = os.Stdout.Write(licenseText)
+		return
+	}
 
 	exclusive := 0
 	for _, b := range []bool{*checkPtr, *fixPtr, *initPtr} {
