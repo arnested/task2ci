@@ -389,6 +389,66 @@ func TestIntegrationCheckDetectsDrift(t *testing.T) {
 	}
 }
 
+func TestIntegrationCheckFailsOnOrphanPlaceholder(t *testing.T) {
+	tmp := t.TempDir()
+	writeFile(t, filepath.Join(tmp, "Taskfile.yaml"), `version: '3'
+tasks:
+  # @ci: ok
+  fine:
+    cmd: echo
+`)
+	writeFile(t, filepath.Join(tmp, ".task2ci/workflows/ci.yaml"), `---
+jobs:
+  j:
+    runs-on: ubuntu-24.04
+    steps:
+      # @ci: ok
+      # @ci: nobody
+`)
+	// Generate first so a workflow exists on disk.
+	if _, stderr, code := runBinary(t, tmp); code != 0 {
+		t.Fatalf("plain generate should succeed despite orphan; got %d stderr=%s", code, stderr)
+	}
+	// -check must fail.
+	_, stderr, code := runBinary(t, tmp, "-check")
+	if code == 0 {
+		t.Fatalf("expected -check to fail on orphan placeholder, got exit 0")
+	}
+	if !strings.Contains(stderr, "orphan") {
+		t.Errorf("expected fatal message to mention orphans, got: %s", stderr)
+	}
+}
+
+func TestIntegrationCheckFailsOnOrphanTag(t *testing.T) {
+	tmp := t.TempDir()
+	writeFile(t, filepath.Join(tmp, "Taskfile.yaml"), `version: '3'
+tasks:
+  # @ci: stray
+  loner:
+    cmd: echo
+  # @ci: ok
+  fine:
+    cmd: echo
+`)
+	writeFile(t, filepath.Join(tmp, ".task2ci/workflows/ci.yaml"), `---
+jobs:
+  j:
+    runs-on: ubuntu-24.04
+    steps:
+      # @ci: ok
+`)
+	if _, stderr, code := runBinary(t, tmp); code != 0 {
+		t.Fatalf("plain generate should succeed; got %d stderr=%s", code, stderr)
+	}
+	_, stderr, code := runBinary(t, tmp, "-check")
+	if code == 0 {
+		t.Fatalf("expected -check to fail on orphan tag, got exit 0")
+	}
+	if !strings.Contains(stderr, "orphan") || !strings.Contains(stderr, "stray") {
+		t.Errorf("expected fatal message about orphan tag 'stray', got: %s", stderr)
+	}
+}
+
 func TestIntegrationOrphanTagWarning(t *testing.T) {
 	// Task has tag X but template has no @ci: X placeholder.
 	tmp := t.TempDir()

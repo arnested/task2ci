@@ -69,7 +69,7 @@ func main() {
 		rendered[outputPathFor(tpath)] = out
 	}
 
-	warnOrphans(tasksByTag, usedTags)
+	orphans := warnOrphans(tasksByTag, usedTags)
 
 	outPaths := make([]string, 0, len(rendered))
 	for p := range rendered {
@@ -88,8 +88,15 @@ func main() {
 				drifted = append(drifted, p)
 			}
 		}
-		if len(drifted) > 0 {
-			log.Fatalf("❌ ERROR: drift detected in: %s. Run task2ci locally and commit the updates.", strings.Join(drifted, ", "))
+		if orphans > 0 || len(drifted) > 0 {
+			var msgs []string
+			if orphans > 0 {
+				msgs = append(msgs, fmt.Sprintf("%d orphan tag/placeholder warning(s) above", orphans))
+			}
+			if len(drifted) > 0 {
+				msgs = append(msgs, fmt.Sprintf("drift in: %s", strings.Join(drifted, ", ")))
+			}
+			log.Fatalf("❌ ERROR: %s. Fix the issues and run task2ci locally before committing.", strings.Join(msgs, "; "))
 		}
 		fmt.Println("✅ Generated workflows are up to date.")
 		return
@@ -208,8 +215,11 @@ func stripTrailingWhitespace(b []byte) []byte {
 }
 
 // warnOrphans reports tags used by tasks but not in any template, and
-// placeholders in templates without matching tasks.
-func warnOrphans(tasksByTag map[string][]Task, usedTags map[string]bool) {
+// placeholders in templates without matching tasks. Returns the total
+// orphan count, so callers (like -check) can treat them as failures.
+func warnOrphans(tasksByTag map[string][]Task, usedTags map[string]bool) int {
+	orphans := 0
+
 	// Tag annotated in Taskfile but no template uses it.
 	taskTags := make([]string, 0, len(tasksByTag))
 	for tag := range tasksByTag {
@@ -225,6 +235,7 @@ func warnOrphans(tasksByTag map[string][]Task, usedTags map[string]bool) {
 			fmt.Fprintf(os.Stderr,
 				"⚠️  Tag %q is used by task(s) %s but no template under %s references it; these tasks will not appear in any workflow.\n",
 				tag, strings.Join(names, ", "), TemplateDir)
+			orphans++
 		}
 	}
 
@@ -239,8 +250,11 @@ func warnOrphans(tasksByTag map[string][]Task, usedTags map[string]bool) {
 			fmt.Fprintf(os.Stderr,
 				"⚠️  Template placeholder `# @ci: %s` has no matching tasks; the placeholder will be removed in the generated workflow.\n",
 				tag)
+			orphans++
 		}
 	}
+
+	return orphans
 }
 
 // readTasks reads the Taskfile, finds `@ci:` annotations, and groups tasks by
