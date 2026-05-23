@@ -1,0 +1,17 @@
+---
+version: 2
+updates:
+  # Action references live in the templates under .task2ci/workflows/.
+  # The .github/workflows/*.yaml files are generated from those templates,
+  # so don't watch them — Dependabot would open PRs that the next task2ci
+  # run reverts.
+  - package-ecosystem: github-actions
+    directories:
+      - /.task2ci/workflows
+    schedule:
+      interval: weekly
+
+  - package-ecosystem: gomod
+    directory: /
+    schedule:
+      interval: weekly
