@@ -5,6 +5,7 @@ import (
 	_ "embed"
 	"flag"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"path/filepath"
@@ -279,7 +280,7 @@ func main() {
 		rendered[outputPathFor(tpath)] = out
 	}
 
-	orphans := warnOrphans(tasksByTag, usedTags)
+	orphans := warnOrphans(os.Stderr, tasksByTag, usedTags)
 
 	outPaths := make([]string, 0, len(rendered))
 	for p := range rendered {
@@ -427,7 +428,7 @@ func stripTrailingWhitespace(b []byte) []byte {
 // warnOrphans reports tags used by tasks but not in any template, and
 // placeholders in templates without matching tasks. Returns the total
 // orphan count, so callers (like -check) can treat them as failures.
-func warnOrphans(tasksByTag map[string][]Task, usedTags map[string]bool) int {
+func warnOrphans(out io.Writer, tasksByTag map[string][]Task, usedTags map[string]bool) int {
 	orphans := 0
 
 	// Tag annotated in Taskfile but no template uses it.
@@ -442,7 +443,7 @@ func warnOrphans(tasksByTag map[string][]Task, usedTags map[string]bool) int {
 			for i, t := range tasksByTag[tag] {
 				names[i] = t.Name
 			}
-			fmt.Fprintf(os.Stderr,
+			_, _ = fmt.Fprintf(out,
 				"⚠️  Tag %q is used by task(s) %s but no template under %s references it.\n"+
 					"    Add this placeholder line to an existing template (or create a new one):\n"+
 					"\n"+
@@ -462,7 +463,7 @@ func warnOrphans(tasksByTag map[string][]Task, usedTags map[string]bool) int {
 	sort.Strings(templateTags)
 	for _, tag := range templateTags {
 		if _, ok := tasksByTag[tag]; !ok {
-			fmt.Fprintf(os.Stderr,
+			_, _ = fmt.Fprintf(out,
 				"⚠️  Template placeholder `# @ci: %s` has no matching tasks; the placeholder will be removed in the generated workflow.\n",
 				tag)
 			orphans++
