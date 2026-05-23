@@ -231,6 +231,34 @@ Non-Go projects: just include
 `uses: go-task/setup-task@v2` in the template; the `run: task <name>`
 lines work the same way.
 
+## Working with AI tools
+
+If you use AI coding assistants (Claude Code, Cursor, Copilot, etc.) in
+your project, paste the snippet below into your `AGENTS.md` /
+`CLAUDE.md` / `.cursorrules` / whatever project-rules file your tool
+reads. It keeps them from trying to hand-edit the generated workflow
+when they should be editing the template instead.
+
+```text
+This project uses task2ci to generate GitHub Actions workflows.
+
+- Source of truth:
+  - `.task2ci/workflows/<name>.yaml` — workflow templates.
+  - `Taskfile.yaml` — task definitions, opted into CI via
+    `# @ci: <tag>` annotations.
+- Generated, do not hand-edit:
+  - `.github/workflows/<name>.yaml` — regenerated from the templates
+    on every `task2ci` run.
+- After changing a template or annotation, run `task2ci` to regenerate
+  the workflow files and commit the result.
+- CI runs `task2ci -check` and fails on drift, orphan tag
+  annotations, or orphan placeholders.
+- Use `task2ci -fix` to delete orphan placeholders from templates.
+- Use `task2ci -init` to scaffold a starter template.
+
+Full docs: https://arnested.github.io/task2ci/
+```
+
 ## Source
 
 [github.com/arnested/task2ci](https://github.com/arnested/task2ci)
