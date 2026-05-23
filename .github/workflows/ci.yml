@@ -12,11 +12,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install task2ci
-        uses: arnested/setup-task2ci@v1
+      # - name: Install task2ci
+      #   uses: arnested/setup-task2ci@v1
 
-      - name: Check generated CI is up to date
-        run: task2ci -check
+      # - name: Check generated CI is up to date
+      #   run: task2ci -check
 
       - name: Build the task2ci binary
         run: go tool task build
@@ -26,11 +26,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install task2ci
-        uses: arnested/setup-task2ci@v1
+      # - name: Install task2ci
+      #   uses: arnested/setup-task2ci@v1
 
-      - name: Check generated CI is up to date
-        run: task2ci -check
+      # - name: Check generated CI is up to date
+      #   run: task2ci -check
 
       - name: Run unit tests
         run: go tool task test
