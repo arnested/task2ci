@@ -5,11 +5,16 @@ layout: default
 
 <div class="callout-caution" markdown="1">
 <span class="callout-title">⚠ Caution — experimental</span>
-
+<p>
 This project is still very much experimental. The CLI, template format, and
 generated workflow shape may change without notice. Pin a specific commit
 if you depend on it, and don't be surprised by breaking changes between
 versions until 1.0.
+</p><p>
+This experiment didn't lead to the developer experience I had in
+mind. The project is archived and won't be developed further. It
+gave me a lot of insight, though, so it was a worthwhile experiment!
+</p>
 </div>
 
 Generate GitHub Actions workflows from your `Taskfile.yaml`, so the commands you

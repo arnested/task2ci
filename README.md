@@ -5,6 +5,10 @@
 > and generated workflow shape may change without notice. Pin a specific
 > commit if you depend on it, and don't be surprised by breaking changes
 > between versions until 1.0.
+>
+> This experiment didn't lead to the developer experience I had in
+> mind. The project is archived and won't be developed further. It
+> gave me a lot of insight, though, so it was a worthwhile experiment!
 
 Generate GitHub Actions workflows from your `Taskfile.yaml`, so the commands you
 run locally are the same ones CI runs — guaranteed, not by hand.

@@ -1,3 +1,4 @@
+// Deprecated: the exeriment has been archived.
 module arnested.dk/go/task2ci
 
 go 1.26.3
